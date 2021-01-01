@@ -10,39 +10,21 @@ $$ -- error('this project has been only tested for the ULX3S, other boards will 
 $$end
 
 algorithm main(
-  // SDRAM
-  output uint1  sdram_cle,
-  output uint1  sdram_dqm,
-  output uint1  sdram_cs,
-  output uint1  sdram_we,
-  output uint1  sdram_cas,
-  output uint1  sdram_ras,
-  output uint2  sdram_ba,
-  output uint13 sdram_a,
-  output uint1  sdram_clk,
-  inout  uint8  sdram_dq,
-  // sdcard
-  output  uint1 sd_clk,
-  output  uint1 sd_mosi,
-  output  uint1 sd_csn,
-  input   uint1 sd_miso,
   // led
   output uint8  leds,
-  // buttons
-  input  uint7  btn,
   // video
   output uint4  gpdi_dp,
   output uint4  gpdi_dn
 )
 {
 
-  uint10 x      = 0;
-  uint10 y      = 0;
-  uint1  active = 0;
-  uint1  vblank = 0;
-  uint8  r      = 0;
-  uint8  g      = 0;
-  uint8  b      = 0;
+  uint10 x      = 0; // (output) the active pixel x coordinate
+  uint10 y      = 0; // (output) the active pixel y coordinate
+  uint1  active = 0; // (output) whether the active screen area is being drawn
+  uint1  vblank = 0; // (output) whether vblank is active (interval between frames)
+  uint8  r      = 0; // (input)  the red value of the active pixel
+  uint8  g      = 0; // (input) the green value of the active pixel
+  uint8  b      = 0; // (input) the blue value of the active pixel
   
   hdmi video(
     x       :> x,

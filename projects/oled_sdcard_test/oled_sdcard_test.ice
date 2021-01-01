@@ -1,8 +1,14 @@
 // SL 2020-07 @sylefeb
 
-// Select screen driver below
+// vvvvvvvvvvvvv select screen driver below
 $$ -- SSD1351=1
 $$ ST7789=1
+//               vvvvv adjust to your screen
+$$ oled_width   = 240
+$$ oled_height  = 240
+//               vvvvv set to false if the screen uses the CS pin
+$$ st7789_no_cs = true
+
 $include('../common/oled.ice')
 
 $$if not ULX3S and not ICARUS then
@@ -19,7 +25,7 @@ algorithm text_display(
   input   uint10 pix_x,
   input   uint10 pix_y,
   output  uint1  white,
-  bram_port0     letter,
+  simple_dualbram_port0 letter,
 ) <autorun> {
 
   // ---------- font  
@@ -36,9 +42,6 @@ $$end
   uint5  letter_j = 0;
   uint12 addr     = 0;
 
-  // read from letter  
-  letter.wenable0  := 0;
-  
   // ---------- show time!
  
   while (1) {
@@ -53,7 +56,7 @@ $$end
       letter.addr0 = text_i + (text_j*$oled_width>>3$);
 ++:      
       addr         = letter_i + ( letter_j << 3) 
-                             + (letter.rdata0 << 6);
+                              + (letter.rdata0 << 6);
       white        = letters[ addr ];
     } else {
       white    = 0;
@@ -90,7 +93,7 @@ algorithm main(
   );
 
   // Read buffer
-  dualport_bram uint8 sdbuffer[512] = uninitialized;
+  simple_dualport_bram uint8 sdbuffer[512] = uninitialized;
 
   sdcardio sdcio;
   sdcard sd(
@@ -106,7 +109,7 @@ algorithm main(
   );
 
   // Text buffer
-  dualport_bram uint6 txt[$(oled_width*oled_height)>>6$] = uninitialized;
+  simple_dualport_bram uint6 txt[$(oled_width*oled_height)>>6$] = uninitialized;
 
   uint11 str_x    = 0;
   uint10 str_y    = 0;
@@ -179,7 +182,6 @@ algorithm main(
   uint7  btns_latch = 0;
 
   btns_latch       ::= btns;
-  sdbuffer.wenable0 := 0;
   sdcio.read_sector := 0;
 
   // maintain low (pulses high when sending)

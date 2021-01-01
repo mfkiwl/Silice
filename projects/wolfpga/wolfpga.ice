@@ -59,7 +59,6 @@ algorithm columns_drawer(
   // reading from column bram
   output uint9  addr,
   input  uint18 rdata, // NOTE, TODO: allow to use bitfield name (DrawColumn)
-  output uint1  wen,
   // how many columns have been written
   input  uint9  num_in_cols,
   // how many collumns have been drawn
@@ -91,7 +90,6 @@ $$for hscr=1,511 do
 $$end
   };
 
-  wen         := 0; // reading from bram
   sd.in_valid := 0; // maintain low (pulses high when needed)  
   sd.rw       := 1; // writing to sdram
 
@@ -132,14 +130,10 @@ $$end
         }
         // write to sdram
         yw = 100+y;
-        while (1) {
-          if (sd.busy == 0) { // not busy?
-            sd.data_in    = palidx;
-            sd.addr       = {1b0,~fbuffer,24b0} | (num_drawn_cols) | (yw << 9); 
-            sd.in_valid   = 1; // go ahead!
-            break;
-          }
-        }          
+        sd.data_in    = palidx;
+        sd.addr       = {1b0,~fbuffer,24b0} | (num_drawn_cols) | (yw << 9); 
+        sd.in_valid   = 1; // go ahead!
+        while (!sd.done) { }
         // other half
         if (y <= h) {
         
@@ -159,14 +153,10 @@ $$end
         
         // write to sdram
         yw = 100-y;
-        while (1) {
-          if (sd.busy == 0) { // not busy?
-            sd.data_in    = palidx;
-            sd.addr       = {1b0,~fbuffer,24b0} | (num_drawn_cols) | (yw << 9); 
-            sd.in_valid   = 1; // go ahead!
-            break;
-          }
-        }
+        sd.data_in    = palidx;
+        sd.addr       = {1b0,~fbuffer,24b0} | (num_drawn_cols) | (yw << 9); 
+        sd.in_valid   = 1; // go ahead!
+        while (!sd.done) { }
         if (y <= h) {
           v_tex = v_tex + v_tex_incr;
         }
@@ -199,7 +189,7 @@ algorithm frame_drawer(
 
   // NOTE, TODO: cannot yet declare the bram with the bitfield
   // bram DrawColumn columns[320] = {};
-  dualport_bram uint18 columns<@clock,@sdram_clock>[320] = uninitialized;
+  simple_dualport_bram uint18 columns<@clock,@sdram_clock>[320] = uninitialized;
 
   // ray-cast columns counter  
   uint9 c       = 0;
@@ -211,9 +201,8 @@ algorithm frame_drawer(
     sd      <:> sd,
     vsync   <: vsync_filtered,
     fbuffer <: fbuffer,
-    addr    :> columns.addr1,  // drives port1 of columns
-    wen     :> columns.wenable1,
-    rdata   <: columns.rdata1,
+    addr    :> columns.addr0,  // drives read (port0) of columns
+    rdata   <: columns.rdata0,
     num_in_cols    <: c,
     num_drawn_cols :> c_drawn
   );
@@ -310,7 +299,7 @@ $$end
 
   fbuffer = 0;
   
-  columns.wenable0 = 1; // write on port 0
+  columns.wenable1 = 1; // write on port 0
   
   while (1) {
     
@@ -412,7 +401,7 @@ $$end
       
         mapxtest = hitx_f >>> $FPf$;
         mapytest = hity_f >>> $FPf$;
-++:             
+++:
         // shall we do vertical or horizontal?
         if (v_or_h == 0) {
           // keep doing vertical?
@@ -431,13 +420,13 @@ $$end
             v_or_h = 0;
           } } 
         }
-++:      
+++:
         // advance 
         if (v_or_h == 0) {
           // check for a hit on vertical edges
           level.addr = (mapx&15) + (((mapytest)&15)<<4);
           // hit = level[(mapx&15) + (((mapytest)&15)<<4)];
-++:      
+++:
           hit = level.rdata;
           if (hit != 0) {
             if (mapxstep < 0) {
@@ -453,7 +442,7 @@ $$end
           // check for a hit on horizontal edges
           level.addr = ((mapxtest)&15) + ((mapy&15)<<4);
           // hit = level[((mapxtest)&15) + ((mapy&15)<<4)];
-++:      
+++:
           hit = level.rdata;
           if (hit != 0) {
             if (mapystep < 0) {
@@ -468,7 +457,7 @@ $$end
         }
       }
       
-++:      
+++:
       // compute distance
       tmp1   = (cosview_m * (hitx_f - posx_f)) >>> $FPm$;
 // ++:   // relax timing      
@@ -480,11 +469,11 @@ $$end
       // projection divide      
       (height) <- div <- ($140<<FPf$,dist_f>>1);
     
-      columns.addr0 = c;
-      DrawColumn(columns.wdata0).height   = height;
-      DrawColumn(columns.wdata0).v_or_h   = v_or_h;
-      DrawColumn(columns.wdata0).material = hit-1;
-      DrawColumn(columns.wdata0).texcoord = (v_or_h == 0) ? (hity_f >>> $FPf-6$) : (hitx_f >>> $FPf-6$);
+      columns.addr1 = c;
+      DrawColumn(columns.wdata1).height   = height;
+      DrawColumn(columns.wdata1).v_or_h   = v_or_h;
+      DrawColumn(columns.wdata1).material = hit-1;
+      DrawColumn(columns.wdata1).texcoord = (v_or_h == 0) ? (hity_f >>> $FPf-6$) : (hitx_f >>> $FPf-6$);
       
       // write on loop     
       c = c + 1;

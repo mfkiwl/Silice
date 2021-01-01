@@ -32,7 +32,9 @@ While I developed Silice for my own needs, I hope you'll find it useful for your
 
 ##### Compile:
 ```
-silice first_example.ice -f frameworks/mojo_led.v -o Mojo-Project/src/mojo_top.v
+cd projects
+cd blinky
+make mojov3
 ```
 
 ##### Enjoy!
@@ -87,6 +89,13 @@ This code is storing a sine table in a block ROM and accesses it to obtain a cos
 Note the use of the **++:** *step* operator in lines 7 and 10. This explicitely splits the exectution flow and introduces a one cycle delay, here waiting for the brom to output its result in field *rdata* for the select address in *addr*.
 Anything in between is considered combinational; for instance lines 8 and 9 are evaluated in parallel on hardware, as they
 each produce two pieces of independent circuitry.
+
+#### Other examples with detailed explanations
+
+This repo contains many [example projects](projects/), some including detailed code walkthrough:
+- [HDMI test framework](projects/hdmi_test/)
+- [streaming audio from sdcard](projects/audio_sdcard_streamer/)
+- [Pipelined sort](projects/pipeline_sort/)
 
 ## Design principles
 

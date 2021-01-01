@@ -82,7 +82,12 @@ $$end
 // ------------------------- 
 
 // SDRAM controller
-$include('sdramctrl.ice')
+$$read_burst_length = 8 -- NOTE: mandatory for the framebuffer!
+$include('sdram_interfaces.ice')
+$include('sdram_controller_autoprecharge_r128_w8.ice')
+// include('sdram_controller_r128_w8.ice')
+$include('sdram_arbitrers.ice')
+$include('sdram_utils.ice')
 
 // ------------------------- 
 
@@ -94,6 +99,8 @@ $include('video_sdram.ice')
 $$if init_data_bytes then
 
 $$if SDCARD then
+
+$$print('setting up for SDRAM initialization from SDCARD')
 
 algorithm init_data(
   output  uint1 sd_clk,
@@ -134,19 +141,20 @@ algorithm init_data(
       stream.next  = 1;
       while (stream.ready == 0) { }
       leds            = to_read[14,8];
+
       // write to sdram
-      // -> wait for sdram to be available
-      while (sd.busy == 1) { }
-      // -> write
       sd.data_in      = stream.data;
       sd.addr         = {1b1,1b0,24b0} | to_read;
       sd.in_valid     = 1; // go ahead!      
+      // -> wait for sdram to be done
+      while (!sd.done) { }     
+
       // next
       to_read = to_read + 1;
     }
   }
 
-  leds  = 4;
+  leds  = 8b10000000;
 
   ready = 1;
 }
@@ -172,14 +180,16 @@ $data_hex$
   __display("loading %d bytes from sdcard (simulation)",$init_data_bytes$);
   while (to_read < $init_data_bytes$) {
     sdcard_data.addr = to_read;
-    // write to sdram
-    // -> wait for sdram to be available
-    while (sd.busy == 1) { }
-    // -> write
+++:    
     data            = sdcard_data.rdata;
+
+    // write to sdram
     sd.data_in      = data;
     sd.addr         = {1b1,1b0,24b0} | to_read;
     sd.in_valid     = 1; // go ahead!
+    // wait for sdram to be done
+    while (!sd.done) { }
+
     // next
     to_read = to_read + 1;
   }
@@ -235,6 +245,10 @@ $$if VGA then
   output uint$color_depth$ video_b,
   output uint1 video_hs,
   output uint1 video_vs,
+$$end
+$$if AUDIO then
+  output uint4 audio_l,
+  output uint4 audio_r,
 $$end
 $$if HDMI then
 $$if ULX3S then
@@ -382,9 +396,10 @@ $$end
 
   // --- SDRAM raw interface
 
-  sdram_raw_io sdm;
+  sdram_r128w8_io sdm;
   
-  sdram_controller memory<@sdram_clock,!sdram_reset>(
+  sdram_controller_autoprecharge_r128_w8 memory<@sdram_clock,!sdram_reset>(
+  // sdram_controller_r128_w8 memory<@sdram_clock,!sdram_reset>(
     sd         <:> sdm,
   $$if VERILATOR then
     dq_i       <: sdram_dq_i,
@@ -396,13 +411,13 @@ $$end
 
   // --- SDRAM byte memory interface
 
-  sdram_raw_io sdf; // framebuffer
-  sdram_raw_io sdd; // drawer
-  sdram_raw_io sdi; // init
+  sdram_r128w8_io sdf; // framebuffer
+  sdram_r128w8_io sdd; // drawer
+  sdram_r128w8_io sdi; // init
 
-  // --- SDRAM switcher, framebuffer (0) / drawer (1) / init (2)
+  // --- SDRAM arbitrer, framebuffer (0) / drawer (1) / init (2)
   
-  sdram_switcher_3way sd_switcher<@sdram_clock,!sdram_reset>(
+  sdram_arbitrer_3way sd_switcher<@sdram_clock,!sdram_reset>(
     sd         <:>  sdm,
     sd0        <:>  sdf,
     sd1        <:>  sdd,
@@ -411,8 +426,8 @@ $$end
 
   // --- Frame buffer row memory
   // dual clock crosses from sdram to vga
-  dualport_bram uint128 fbr0<@video_clock,@sdram_clock>[$320//16$] = uninitialized;
-  dualport_bram uint128 fbr1<@video_clock,@sdram_clock>[$320//16$] = uninitialized;
+  simple_dualport_bram uint128 fbr0<@video_clock,@sdram_clock>[$320//16$] = uninitialized;
+  simple_dualport_bram uint128 fbr1<@video_clock,@sdram_clock>[$320//16$] = uninitialized;
   
   // --- Display
   uint1 row_busy = 0;
@@ -447,7 +462,7 @@ $$end
   );
 
   // --- Init from SDCARD
-  sdram_raw_io sdh;
+  sdram_r128w8_io sdh;
   
   sdram_half_speed_access sdaccess<@sdram_clock,!sdram_reset>(
     sd      <:> sdi,
@@ -486,9 +501,9 @@ $$if HARDWARE then
 $$else
   // we count a number of frames and stop
 $$if ICARUS then
-  while (frame < 12) {
+  while (frame < 4) {
 $$else
-  while (frame < 12) {
+  while (frame < 20) {
 $$end    
     while (video_vblank == 1) { }
 	  while (video_vblank == 0) { }

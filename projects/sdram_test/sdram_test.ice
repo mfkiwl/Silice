@@ -1,7 +1,12 @@
+// SL 2020
+//
+// A simple test for SDRAM controllers, in simulation
+//
 // ------------------------- 
 
-// SDRAM controller
-$include('../common/sdramctrl.ice')
+$include('../common/sdram_interfaces.ice')
+$include('../common/sdram_controller_autoprecharge_r16_w16.ice')
+$include('../common/sdram_utils.ice')
 
 $$if ICARUS then
 // SDRAM simulator
@@ -69,78 +74,69 @@ simul_sdram simul(
 
 $$end
 
-// SDRAM chip controller
-// interface
-sdram_raw_io sdram_io;
-// algorithm
-sdram_controller sdram(
-  sd        <:> sdram_io,
-  sdram_cle :>  sdram_cle,
-  sdram_dqm :>  sdram_dqm,
-  sdram_cs  :>  sdram_cs,
-  sdram_we  :>  sdram_we,
-  sdram_cas :>  sdram_cas,
-  sdram_ras :>  sdram_ras,
-  sdram_ba  :>  sdram_ba,
-  sdram_a   :>  sdram_a,
-$$if VERILATOR then
-  dq_i      <:  sdram_dq_i,
-  dq_o      :>  sdram_dq_o,
-  dq_en     :>  sdram_dq_en,
-$$else
-  sdram_dq  <:> sdram_dq
-$$end
-);
+  // SDRAM interface
+  sdram_r16w16_io sio;
+  
+  // algorithm
+  sdram_controller_autoprecharge_r16_w16 sdram(
+    sd        <:> sio,
+    sdram_cle :>  sdram_cle,
+    sdram_dqm :>  sdram_dqm,
+    sdram_cs  :>  sdram_cs,
+    sdram_we  :>  sdram_we,
+    sdram_cas :>  sdram_cas,
+    sdram_ras :>  sdram_ras,
+    sdram_ba  :>  sdram_ba,
+    sdram_a   :>  sdram_a,
+  $$if VERILATOR then
+    dq_i      <:  sdram_dq_i,
+    dq_o      :>  sdram_dq_o,
+    dq_en     :>  sdram_dq_en,
+  $$else
+    sdram_dq  <:> sdram_dq
+  $$end
+  );
 
-// SDRAM memory interface
-// interface
-sdram_byte_io sio;
-// algorithm
-sdram_byte_readcache memory(
-  sdr <:> sdram_io,
-  sdb <:> sio
-);
+  uint16               count = 0;
+  sameas(sio.data_out) read  = 0;
 
-  uint8  count = 0;
-  uint8   read = 0;
-
-$$if VERILATOR then
+  $$if VERILATOR then
   // sdram clock for verilator simulation
   sdram_clock := clock;
-$$end
-  // maintain low (pulse up when ready, see below)
+  $$end
+  
+  // maintain low (pulses when ready, see below)
   sio.in_valid := 0;
 
-$display("=== writing ===");
+  $display("=== writing ===");
+
   // write
   sio.rw = 1;
-  while (count < 64) {
+  while (count < 65534) {
     // write to sdram
-    while (1) {
-      if (sio.busy == 0) {        // not busy?            
-        sio.data_in    = count;            
-        sio.addr       = count;
-        sio.in_valid   = 1; // go ahead!
-        break;
-      }
-    } // write occurs during loop cycle      
-    count = count + 1;
+    sio.data_in    = count;            
+    sio.addr       = count;
+    sio.in_valid   = 1; // go ahead!
+    while (!sio.done) { }
+    if (count < 16 || count > 65520) {
+      __display("write [%x] = %x",count,count);
+    }
+    count          = count + 2;
   }
 
-$display("=== readback ===");
-  count = 0;
+  $display("=== readback ===");
   // read back
   sio.rw = 0;
-  while (count < 64) {
-    if (sio.busy == 0) {
-      sio.addr     = count;
-      sio.in_valid = 1;         // go ahead!
-      while (sio.out_valid == 0) { } // wait for value
-      read = sio.data_out;
-      $display("read [%x] = %x",count,read);
-      count = count + 1;
-    }
+  count  = 0;
+  while (count < 65534) {
+    sio.addr     = count;
+    sio.in_valid = 1; // go ahead!
+    while (!sio.done) { }
+    read = sio.data_out;
+    if (count < 16 || count > 65520) {
+      __display("read  [%x] = %x",count,read);
+    }  
+    count = count + 2;
   }  
+
 }
-
-
