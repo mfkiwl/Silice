@@ -1,17 +1,25 @@
 /*
 
     Silice FPGA language and compiler
-    (c) Sylvain Lefebvre - @sylefeb
+    Copyright 2019, (C) Sylvain Lefebvre and contributors 
 
-This work and all associated files are under the
+    List contributors with: git shortlog -n -s -- <filename>
 
-     GNU AFFERO GENERAL PUBLIC LICENSE
-        Version 3, 19 November 2007
+    GPLv3 license, see LICENSE_GPLv3 in Silice repo root
 
-A copy of the license full text is included in
-the distribution, please refer to it for details.
+This program is free software: you can redistribute it and/or modify it 
+under the terms of the GNU General Public License as published by the 
+Free Software Foundation, either version 3 of the License, or (at your option) 
+any later version.
 
-(header_1_0)
+This program is distributed in the hope that it will be useful, but WITHOUT 
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with 
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+(header_2_G)
 */
 // -------------------------------------------------
 //                                ... hardcoding ...
@@ -20,6 +28,8 @@ the distribution, please refer to it for details.
 #include "SiliceCompiler.h"
 #include "Config.h"
 #include "ExpressionLinter.h"
+#include "RISCVSynthesizer.h"
+#include "Utils.h"
 
 // -------------------------------------------------
 
@@ -33,6 +43,7 @@ the distribution, please refer to it for details.
 #include <LibSL/LibSL.h>
 
 using namespace Silice;
+using namespace Silice::Utils;
 
 // -------------------------------------------------
 
@@ -66,15 +77,16 @@ void SiliceCompiler::gatherAll(antlr4::tree::ParseTree* tree)
     return;
   }
 
-  auto toplist = dynamic_cast<siliceParser::TopListContext*>(tree);
-  auto alg = dynamic_cast<siliceParser::AlgorithmContext*>(tree);
-  auto circuit = dynamic_cast<siliceParser::CircuitryContext*>(tree);
-  auto imprt = dynamic_cast<siliceParser::ImportvContext*>(tree);
-  auto app = dynamic_cast<siliceParser::AppendvContext*>(tree);
-  auto sub = dynamic_cast<siliceParser::SubroutineContext*>(tree);
-  auto group = dynamic_cast<siliceParser::GroupContext*>(tree);
+  auto toplist  = dynamic_cast<siliceParser::TopListContext*>(tree);
+  auto alg      = dynamic_cast<siliceParser::AlgorithmContext*>(tree);
+  auto circuit  = dynamic_cast<siliceParser::CircuitryContext*>(tree);
+  auto imprt    = dynamic_cast<siliceParser::ImportvContext*>(tree);
+  auto app      = dynamic_cast<siliceParser::AppendvContext*>(tree);
+  auto sub      = dynamic_cast<siliceParser::SubroutineContext*>(tree);
+  auto group    = dynamic_cast<siliceParser::GroupContext*>(tree);
   auto intrface = dynamic_cast<siliceParser::IntrfaceContext *>(tree);
   auto bitfield = dynamic_cast<siliceParser::BitfieldContext*>(tree);
+  auto riscv    = dynamic_cast<siliceParser::RiscvContext *>(tree);
 
   if (toplist) {
 
@@ -88,12 +100,16 @@ void SiliceCompiler::gatherAll(antlr4::tree::ParseTree* tree)
     /// algorithm
     std::string name = alg->IDENTIFIER()->getText();
     std::cerr << "parsing algorithm " << name << nxl;
-    bool autorun = (name == "main");
-    bool onehot = false;
+    bool autorun = (name == "main"); // main always autoruns
+    bool onehot  = false;
+    std::string formalDepth = "";
+    std::string formalTimeout = "";
+    std::vector<std::string> formalModes{};
     std::string clock = ALG_CLOCK;
     std::string reset = ALG_RESET;
-    if (alg->algModifiers() != nullptr) {
-      for (auto m : alg->algModifiers()->algModifier()) {
+    bool hasHash = alg->HASH() != nullptr;
+    if (alg->bpModifiers() != nullptr) {
+      for (auto m : alg->bpModifiers()->bpModifier()) {
         if (m->sclock() != nullptr) {
           clock = m->sclock()->IDENTIFIER()->getText();
         }
@@ -109,18 +125,38 @@ void SiliceCompiler::gatherAll(antlr4::tree::ParseTree* tree)
         if (m->sstacksz() != nullptr) {
           // deprecated, ignore
         }
+        if (m->sformdepth() != nullptr) {
+          formalDepth = m->sformdepth()->NUMBER()->getText();
+        }
+        if (m->sformtimeout() != nullptr) {
+          formalTimeout = m->sformtimeout()->NUMBER()->getText();
+        }
+        if (m->sformmode() != nullptr) {
+          for (auto i : m->sformmode()->IDENTIFIER()) {
+            std::string mode = i->getText();
+            if (mode != "bmc" && mode != "tind" && mode != "cover") {
+              throw Fatal("Unknown formal mode '%s' (line %d).", mode.c_str(), (int)m->sformmode()->getStart()->getLine());
+            }
+            formalModes.push_back(mode);
+          }
+        }
       }
     }
+    if (formalModes.empty()) {
+      // default to a simple BMC if no mode is specified
+      formalModes.push_back("bmc");
+    }
+
     AutoPtr<Algorithm> algorithm(new Algorithm(
-      name, clock, reset, autorun, onehot,
-      m_Modules, m_Subroutines, m_Circuitries, m_Groups, m_Interfaces, m_BitFields)
+      name, hasHash, clock, reset, autorun, onehot, formalDepth, formalTimeout, formalModes,
+      m_Blueprints, m_Subroutines, m_Circuitries, m_Groups, m_Interfaces, m_BitFields)
     );
-    if (m_Algorithms.find(name) != m_Algorithms.end()) {
-      throw Fatal("an algorithm with same name already exists (line %d)!", (int)alg->getStart()->getLine());
+    if (m_Blueprints.find(name) != m_Blueprints.end()) {
+      throw Fatal("an algorithm or module with the same name already exists (line %d)!", (int)alg->getStart()->getLine());
     }
     algorithm->gather(alg->inOutList(), alg->declAndInstrList());
-    m_Algorithms.insert(std::make_pair(name, algorithm));
-    m_AlgorithmsInDeclOrder.push_back(name);
+    m_Blueprints.insert(std::make_pair(name, algorithm));
+    m_BlueprintsInDeclOrder.push_back(name);
 
   } else if (circuit) {
 
@@ -168,12 +204,12 @@ void SiliceCompiler::gatherAll(antlr4::tree::ParseTree* tree)
       throw Fatal("cannot find module file '%s' (line %d)", fname.c_str(), (int)imprt->getStart()->getLine());
     }
     AutoPtr<Module> vmodule(new Module(fname));
-    if (m_Modules.find(fname) != m_Modules.end()) {
-      throw Fatal("verilog module already imported! (line %d)", (int)imprt->getStart()->getLine());
+    if (m_Blueprints.find(fname) != m_Blueprints.end()) {
+      throw Fatal("an algorithm or module with the same name already exists (line %d)!", (int)imprt->getStart()->getLine());
     }
     std::cerr << "parsing module " << vmodule->name() << nxl;
-    m_Modules.insert(std::make_pair(vmodule->name(), vmodule));
-    m_ModulesInDeclOrder.push_back(vmodule->name());
+    m_Blueprints.insert(std::make_pair(vmodule->name(), vmodule));
+    m_BlueprintsInDeclOrder.push_back(vmodule->name());
 
   } else if (app) {
 
@@ -196,6 +232,13 @@ void SiliceCompiler::gatherAll(antlr4::tree::ParseTree* tree)
     }
     m_Subroutines.insert(std::make_pair(sub->IDENTIFIER()->getText(), sub));
 
+  } else if (riscv) {
+
+    /// RISC-V
+    AutoPtr<RISCVSynthesizer> rv(new RISCVSynthesizer(riscv));
+    m_Blueprints.insert(std::make_pair(riscv->IDENTIFIER()->getText(), rv));
+    m_BlueprintsInDeclOrder.push_back(riscv->IDENTIFIER()->getText());
+
   }
 }
 
@@ -203,6 +246,11 @@ void SiliceCompiler::gatherAll(antlr4::tree::ParseTree* tree)
 
 void SiliceCompiler::prepareFramework(std::string fframework, std::string& _lpp, std::string& _verilog)
 {
+  // if we don't have a framework (as for the formal board),
+  // don't try to open a file located at the empty path "".
+  if (fframework.empty())
+    return;
+
   // gather 
   // - pre-processor header (all lines starting with $$)
   // - verilog code (all other lines)
@@ -227,7 +275,9 @@ void SiliceCompiler::run(
   std::string fresult,
   std::string fframework,
   std::string frameworks_dir,
-  const std::vector<std::string>& defines)
+  const std::vector<std::string>& defines,
+  std::string to_export,
+  const std::vector<std::string>& export_params)
 {
   // determine frameworks dir if needed
   if (frameworks_dir.empty()) {
@@ -257,6 +307,7 @@ void SiliceCompiler::run(
   CONFIG.keyValues()["libraries_path"] = frameworks_dir + "/libraries";
   // preprocessor
   LuaPreProcessor lpp;
+  lpp.enableFilesReport(fresult + ".files.log");
   std::string preprocessed = std::string(fsource) + ".lpp";
   lpp.run(fsource, c_DefaultLibraries, header, preprocessed);
   // display config
@@ -280,29 +331,27 @@ void SiliceCompiler::run(
     parser.removeErrorListeners();
     parser.addErrorListener(&parserErrorListener);
 
-    ExpressionLinter::setTokenStream(dynamic_cast<antlr4::TokenStream*>(parser.getInputStream()));
-    ExpressionLinter::setLuaPreProcessor(&lpp);
+    Utils::setTokenStream(dynamic_cast<antlr4::TokenStream*>(parser.getInputStream()));
+    Utils::setLuaPreProcessor(&lpp);
+    Algorithm::setLuaPreProcessor(&lpp);
 
     try {
 
       // analyze
       gatherAll(parser.topList());
 
-      // resolve refs between algorithms and modules
-      for (const auto& alg : m_Algorithms) {
-        alg.second->resolveAlgorithmRefs(m_Algorithms);
-        alg.second->resolveModuleRefs(m_Modules);
+      // resolve refs between algorithms and blueprints
+      for (const auto& bp : m_Blueprints) {
+        Algorithm *alg = dynamic_cast<Algorithm*>(bp.second.raw());
+        if (alg != nullptr) {
+          alg->resolveInstancedBlueprintRefs(m_Blueprints);
+        }
       }
 
-      // optimize
-      for (const auto& alg : m_Algorithms) {
-        alg.second->optimize();
-      }
-
-      // save the result
+      // generate the output
       {
         std::ofstream out(fresult);
-        // wrtie cmd line defines
+        // write cmd line defines
         for (auto d : defines) {
           auto eq = d.find('=');
           if (eq != std::string::npos) {
@@ -313,31 +362,67 @@ void SiliceCompiler::run(
         out << framework_verilog;
         // write includes
         for (auto fname : m_AppendsInDeclOrder) {
-          out << Module::fileToString(fname.c_str()) << nxl;
+          out << Utils::fileToString(fname.c_str()) << nxl;
         }
-        // write imported modules
-        for (auto miordr : m_ModulesInDeclOrder) {
-          auto m = m_Modules.at(miordr);
-          m->writeModule(out);
+        // write 'global' blueprints
+        for (auto miordr : m_BlueprintsInDeclOrder) {
+          Module *mod = dynamic_cast<Module*>(m_Blueprints.at(miordr).raw());
+          if (mod != nullptr) {
+            mod->writeModule(out);
+          }
+          RISCVSynthesizer *rv = dynamic_cast<RISCVSynthesizer*>(m_Blueprints.at(miordr).raw());
+          if (rv != nullptr) {
+            rv->writeCompiled(out);
+          }
         }
-        // write algorithms as modules
-        for (auto aiordr : m_AlgorithmsInDeclOrder) {
-          auto a = m_Algorithms.at(aiordr);
-          a->writeAsModule(out);
-          // experimental FSM ouptut for analysis
-          // a->outputFSMGraph(fresult + "_" + a->name() + ".dot");
+
+        if (to_export.empty()) {
+          to_export = "main"; // export main by default
+        }
+        if (m_Blueprints.count(to_export) > 0) {
+          Algorithm *alg = dynamic_cast<Algorithm*>(m_Blueprints[to_export].raw());
+          if (alg == nullptr) {
+            reportError(antlr4::misc::Interval::INVALID, -1, "could not find algorithm '%s'", to_export.c_str());
+          } else {
+            Algorithm::t_instantiation_context ictx;
+            // ask for reports
+            alg->enableReporting(fresult);
+            // add instantiation parameters to context
+            for (auto p : export_params) {
+              auto eq = p.find('=');
+              if (eq != std::string::npos) {
+                ictx.parameters[ p.substr(0, eq) ] = p.substr(eq + 1);
+              }
+            }
+            // write algorithm (recurses from there)
+            alg->writeAsModule("", out, ictx);
+          }
+        } else {
+          warn(Standard, antlr4::misc::Interval::INVALID, -1, "could not find algorithm '%s'", to_export.c_str());
+        }
+
+        // write formal unit tests
+        for (auto const &[algname, bp] : m_Blueprints) {
+          Algorithm *alg = dynamic_cast<Algorithm*>(bp.raw());
+          if (alg != nullptr) {
+            if (alg->isFormal()) {
+              alg->enableReporting(fresult);
+              alg->writeAsModule("formal_" + algname + "$", out);
+            }
+          }
         }
       }
     
-    } catch (Algorithm::LanguageError& le) {
+    } catch (LanguageError& le) {
 
       ReportError err(lpp, le.line(), dynamic_cast<antlr4::TokenStream*>(parser.getInputStream()), le.token(), le.interval(), le.message());
       throw Fatal("Silice compiler stopped");
 
     }
 
-    ExpressionLinter::setTokenStream(nullptr);
-    ExpressionLinter::setLuaPreProcessor(nullptr);
+    Utils::setTokenStream(nullptr);
+    Utils::setLuaPreProcessor(nullptr);
+    Algorithm::setLuaPreProcessor(nullptr);
 
   } else {
     throw Fatal("cannot open source file '%s'", fsource.c_str());
@@ -414,25 +499,6 @@ void SiliceCompiler::ReportError::printReport(std::pair<std::string, int> where,
 
 // -------------------------------------------------
 
-std::string SiliceCompiler::ReportError::extractCodeBetweenTokens(std::string file, antlr4::TokenStream *tk_stream, int stk, int etk) const
-{
-  int sidx = (int)tk_stream->get(stk)->getStartIndex();
-  int eidx = (int)tk_stream->get(etk)->getStopIndex();
-  FILE *f = NULL;
-  fopen_s(&f, file.c_str(), "rb");
-  if (f) {
-    char buffer[256];
-    fseek(f, sidx, SEEK_SET);
-    int read = (int)fread(buffer, 1, min(255, eidx - sidx + 1), f);
-    buffer[read] = '\0';
-    fclose(f);
-    return std::string(buffer);
-  }
-  return tk_stream->getText(tk_stream->get(stk), tk_stream->get(etk));
-}
-
-// -------------------------------------------------
-
 std::string SiliceCompiler::ReportError::extractCodeAroundToken(std::string file, antlr4::Token* tk, antlr4::TokenStream* tk_stream, int& _offset) const
 {
   antlr4::Token* first_tk = tk;
@@ -457,7 +523,7 @@ std::string SiliceCompiler::ReportError::extractCodeAroundToken(std::string file
   }
   _offset = (int)first_tk->getStartIndex();
   // now extract from file
-  return extractCodeBetweenTokens(file, tk_stream, (int)first_tk->getTokenIndex(), (int)last_tk->getTokenIndex());
+  return extractCodeBetweenTokens(file, (int)first_tk->getTokenIndex(), (int)last_tk->getTokenIndex());
 }
 
 // -------------------------------------------------
@@ -477,7 +543,7 @@ std::string SiliceCompiler::ReportError::prepareMessage(antlr4::TokenStream* tk_
       if (interval.a > interval.b) {
         std::swap(interval.a, interval.b);
       }
-      codeline = extractCodeBetweenTokens(file, tk_stream, (int)interval.a, (int)interval.b);
+      codeline = extractCodeBetweenTokens(file, (int)interval.a, (int)interval.b);
       offset = (int)tk_stream->get(interval.a)->getStartIndex();
     }
     msg += codeline;

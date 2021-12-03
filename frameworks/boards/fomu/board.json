@@ -2,18 +2,37 @@
   "name": "fomu",
   "variants": [
     {
+      "name"      : "pvt1",
+      "framework" : "fomu.v",
+      "pins"      : [ 
+        {"set"    : "basic"},
+        {"set"    : "usb",  "define" : "USB=1"},
+        {"set"    : "pads", "define" : "PADS=1"},
+        {"set"    : "spiflash", "define" : "SPIFLASH=1"},
+        {"set"    : "oled", "define" : "OLED=1"}
+      ],
+      "builders": [
+        {
+          "builder" : "shell",
+          "command" : "fomu-pvt1.sh",
+          "description": "Custom shell scripts using yosys and nextpnr"
+        }
+      ]    
+    },
+    {
       "name"      : "hacker",
       "framework" : "fomu.v",
       "pins"      : [ 
         {"set"    : "basic"},
         {"set"    : "usb",  "define" : "USB=1"},
-        {"set"    : "spi",  "define" : "SPI=1"},
-        {"set"    : "pads", "define" : "PADS=1"}
+        {"set"    : "spiflash",  "define" : "SPIFLASH=1"},
+        {"set"    : "pads", "define" : "PADS=1"},
+        {"set"    : "oled", "define" : "OLED=1"}
       ],
       "builders": [
         {
           "builder" : "shell",
-          "command" : "fomu.sh",
+          "command" : "fomu-hacker.sh",
           "description": "Custom shell scripts using yosys and nextpnr"
         }
       ]    
@@ -44,24 +63,51 @@
         "io": "output"
       }
     ],
-    "spi": [
+    "spiflash": [
       {
-        "name": "spi_mosi",
+        "name": "sf_mosi",
         "type": "uint1",
         "io": "output"
       },
       {
-        "name": "spi_miso",
+        "name": "sf_miso",
         "type": "uint1",
         "io": "input"
       },
       {
-        "name": "spi_clk",
+        "name": "sf_clk",
         "type": "uint1",
         "io": "output"
       },      
       {
-        "name": "spi_cs",
+        "name": "sf_csn",
+        "type": "uint1",
+        "io": "output"
+      }
+    ],
+    "oled": [
+      {
+        "name": "oled_clk",
+        "type": "uint1",
+        "io": "output"
+      },
+      {
+        "name": "oled_mosi",
+        "type": "uint1",
+        "io": "output"
+      },
+      {
+        "name": "oled_csn",
+        "type": "uint1",
+        "io": "output"
+      },
+      {
+        "name": "oled_resn",
+        "type": "uint1",
+        "io": "output"
+      },
+      {
+        "name": "oled_dc",
         "type": "uint1",
         "io": "output"
       }

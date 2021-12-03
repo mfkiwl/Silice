@@ -1,17 +1,25 @@
 /*
 
     Silice FPGA language and compiler
-    (c) Sylvain Lefebvre - @sylefeb
+    Copyright 2019, (C) Sylvain Lefebvre and contributors 
 
-This work and all associated files are under the
+    List contributors with: git shortlog -n -s -- <filename>
 
-     GNU AFFERO GENERAL PUBLIC LICENSE
-        Version 3, 19 November 2007
-        
-A copy of the license full text is included in 
-the distribution, please refer to it for details.
+    GPLv3 license, see LICENSE_GPLv3 in Silice repo root
 
-(header_1_0)
+This program is free software: you can redistribute it and/or modify it 
+under the terms of the GNU General Public License as published by the 
+Free Software Foundation, either version 3 of the License, or (at your option) 
+any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT 
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with 
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+(header_2_G)
 */
 #pragma once
 // -------------------------------------------------
@@ -42,10 +50,8 @@ namespace Silice {
   private:
 
     std::vector<std::string>                                           m_Paths;
-    std::unordered_map<std::string, AutoPtr<Algorithm> >               m_Algorithms;
-    std::vector<std::string>                                           m_AlgorithmsInDeclOrder;
-    std::unordered_map<std::string, AutoPtr<Module> >                  m_Modules;
-    std::vector<std::string>                                           m_ModulesInDeclOrder;
+    std::unordered_map<std::string, AutoPtr<Blueprint> >               m_Blueprints;
+    std::vector<std::string>                                           m_BlueprintsInDeclOrder;
     std::unordered_map<std::string, siliceParser::SubroutineContext* > m_Subroutines;
     std::unordered_map<std::string, siliceParser::CircuitryContext* >  m_Circuitries;
     std::unordered_map<std::string, siliceParser::GroupContext* >      m_Groups;
@@ -73,7 +79,6 @@ namespace Silice {
       void        split(const std::string& s, char delim, std::vector<std::string>& elems) const;
       void        printReport(std::pair<std::string, int> where, std::string msg) const;
       int         lineFromInterval(antlr4::TokenStream *tk_stream, antlr4::misc::Interval interval) const;
-      std::string extractCodeBetweenTokens(std::string file, antlr4::TokenStream *tk_stream, int stk, int etk) const;
       std::string extractCodeAroundToken(std::string file, antlr4::Token *tk, antlr4::TokenStream *tk_stream, int &_offset) const;
       std::string prepareMessage(antlr4::TokenStream* tk_stream, antlr4::Token *offender, antlr4::misc::Interval tk_interval) const;
 
@@ -134,7 +139,9 @@ namespace Silice {
       std::string fresult,
       std::string fframework,
       std::string frameworks_dir,
-      const std::vector<std::string>& defines);
+      const std::vector<std::string>& defines,      
+      std::string to_export,
+      const std::vector<std::string>& export_params);
 
   };
 

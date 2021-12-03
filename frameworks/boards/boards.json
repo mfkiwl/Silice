@@ -32,6 +32,21 @@
     },
     {
       "name" : "techgraph"
+    },
+    {
+      "name" : "ecpix5"
+    },
+    {
+      "name" : "littlebee"
+    },
+    {
+      "name" : "icebitsy"
+    },
+    {
+      "name" : "formal"
+    },
+    {
+      "name" : "bare"
     }
   ]
 }

@@ -1,86 +1,66 @@
 // SL 2020-07
+// MIT license, see LICENSE_MIT in Silice repo root
+// https://github.com/sylefeb/Silice
 
 // vvvvvvvvvvvvv select screen driver below
+$$ -- SSD1331=1 -- NOTE: not yet correctly supported
 $$ -- SSD1351=1
 $$ ST7789=1
-//               vvvvv adjust to your screen
-$$ oled_width   = 240
+//                vvv adjust to your screen
+$$ oled_width   = 320
 $$ oled_height  = 240
-//               vvvvv set to false if the screen uses the CS pin
-$$ st7789_no_cs = true
+//                vvv set to false if the screen uses the CS pin
+$$ st7789_no_cs = nil
+//                    vvvv set to true to rotate view 90 degrees
+$$ st7789_transpose = true
+
+// default configured for https://www.waveshare.com/wiki/2inch_LCD_Module
+
+// -------------------------
 
 $include('../common/oled.ice')
 
-$$if not ULX3S and not DE10NANO and not ICARUS then
-$$error('only tested on ULX3S and DE10NANO, small changes likely required to main input/outputs for other boards')
+$$if not OLED and not SIMULATION then
+$$error('This project requires an OLED screen')
 $$end
 
-// ------------------------- 
+// -------------------------
 
 algorithm main(
-  output! uint$NUM_LEDS$ leds,
-$$if ULX3S then
-  input   uint7 btn,
-  output! uint1 oled_clk,
-  output! uint1 oled_mosi,
-  output! uint1 oled_dc,
-  output! uint1 oled_resn,
-  output! uint1 oled_csn,
+  output uint$NUM_LEDS$ leds,
+$$if OLED then
+  output uint1 oled_clk,
+  output uint1 oled_mosi,
+  output uint1 oled_dc,
+  output uint1 oled_resn,
+  output uint1 oled_csn,
+$$if VERILATOR then
+$$if ST7789 then
+  output uint2  spiscreen_driver(2/*ST7789*/),
+$$else
+  output uint2  spiscreen_driver(1/*SSD1351*/),
 $$end
-$$if ICARUS then
-  input   uint7 btn,
-  output! uint1 oled_clk,
-  output! uint1 oled_mosi,
-  output! uint1 oled_dc,
-  output! uint1 oled_resn,
-  output! uint1 oled_csn,
+  output uint10 spiscreen_width($oled_height$),
+  output uint10 spiscreen_height($oled_width$),
 $$end
-$$if DE10NANO then
-  output! uint4 kpadC,
-  input   uint4 kpadR,
-  output! uint1 lcd_rs,
-  output! uint1 lcd_rw,
-  output! uint1 lcd_e,
-  output! uint8 lcd_d,
-  output! uint1 oled_din,
-  output! uint1 oled_clk,
-  output! uint1 oled_cs,
-  output! uint1 oled_dc,
-  output! uint1 oled_rst,  
-  output! uint1  sdram_cle,
-  output! uint1  sdram_dqm,
-  output! uint1  sdram_cs,
-  output! uint1  sdram_we,
-  output! uint1  sdram_cas,
-  output! uint1  sdram_ras,
-  output! uint2  sdram_ba,
-  output! uint13 sdram_a,
-  output! uint1  sdram_clk,
-  inout   uint8  sdram_dq,
-  output! uint$color_depth$ video_r,
-  output! uint$color_depth$ video_g,
-  output! uint$color_depth$ video_b,
-  output! uint1 video_hs,
-  output! uint1 video_vs
 $$end
 ) {
 
+$$if not OLED then
+  uint1 oled_clk(0);
+  uint1 oled_mosi(0);
+  uint1 oled_dc(0);
+  uint1 oled_resn(0);
+  uint1 oled_csn(0);
+$$end
+
   oledio io;
   oled   display(
-$$if ULX3S then
     oled_clk  :> oled_clk,
     oled_mosi :> oled_mosi,
     oled_dc   :> oled_dc,
     oled_resn :> oled_resn,
     oled_csn  :> oled_csn,
-$$end
-$$if DE10NANO then
-    oled_clk  :> oled_clk,
-    oled_mosi :> oled_din,
-    oled_dc   :> oled_dc,
-    oled_resn :> oled_rst,
-    oled_csn  :> oled_cs,
-$$end
     io       <:> io
   );
 
@@ -91,13 +71,13 @@ $$end
   // maintain low (pulses high when sending)
   io.start_rect := 0;
   io.next_pixel := 0;
-  
+
   while (1) {
-  
+
     uint10 u     = uninitialized;
     uint10 v     = uninitialized;
 
-    // wait for controller to be ready  
+    // wait for controller to be ready
     while (io.ready == 0) { }
 
      // draw window
@@ -106,6 +86,7 @@ $$end
     io.y_start = 0;
     io.y_end   = $oled_height-1$;
     io.start_rect = 1;
+
     while (io.ready == 0) { }
 
     // simple test pattern
@@ -119,14 +100,17 @@ $$end
         io.next_pixel = 1;
         while (io.ready == 0) { } // wait ack
         u = u + 1;
+
+$$if ICARUS then
+      __finish();
+$$end
       }
       v = v + 1;
     }
-    
+
     frame = frame + 1;
-   
   }
 
 }
 
-// ------------------------- 
+// -------------------------

@@ -4,8 +4,11 @@
 // with small combinational chains
 //
 // TODO: return twice as wide!
+//
+// MIT license, see LICENSE_MIT in Silice repo root
+// https://github.com/sylefeb/Silice
 
-// find out power of 2 of mul_width
+// Compute log2 of of mul_width
 $$mul_width_pow2=0
 $$tmp = mul_width
 $$while tmp > 1 do
@@ -37,7 +40,7 @@ $$end
 
   // the pipeline runs forever, consuming anything throw at it
   while (1) {
-  
+
     // initial stage
     {
       if (im0 < 0) {
@@ -46,7 +49,7 @@ $$end
       } else {
         m0 = im0;
       }
-      
+
       if (im1 < 0) {
         m1_neg = 1;
         m1 = - im1;
@@ -79,7 +82,7 @@ $$end
         ret = - sum_1_0;
       } else {
         ret = sum_1_0;
-      }  
+      }
     }
   } // forever
 }

@@ -1,17 +1,25 @@
 /*
 
     Silice FPGA language and compiler
-    (c) Sylvain Lefebvre - @sylefeb
+    Copyright 2019, (C) Sylvain Lefebvre and contributors 
 
-This work and all associated files are under the
+    List contributors with: git shortlog -n -s -- <filename>
 
-     GNU AFFERO GENERAL PUBLIC LICENSE
-        Version 3, 19 November 2007
-        
-A copy of the license full text is included in 
-the distribution, please refer to it for details.
+    GPLv3 license, see LICENSE_GPLv3 in Silice repo root
 
-(header_1_0)
+This program is free software: you can redistribute it and/or modify it 
+under the terms of the GNU General Public License as published by the 
+Free Software Foundation, either version 3 of the License, or (at your option) 
+any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT 
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with 
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+(header_2_G)
 */
 // -------------------------------------------------
 //                                ... hardcoding ...
@@ -21,17 +29,20 @@ the distribution, please refer to it for details.
 // -------------------------------------------------
 #include "LuaPreProcessor.h"
 #include "Config.h"
+#include "Utils.h"
 // -------------------------------------------------
 
 #include <iostream>
 #include <fstream>
 #include <regex>
 #include <queue>
+#include <filesystem>
 
 #include <LibSL/LibSL.h>
 
 using namespace std;
 using namespace antlr4;
+using namespace Silice;
 
 // -------------------------------------------------
 
@@ -252,11 +263,16 @@ static void lua_write_palette_in_table(lua_State* L, std::string str, int compon
   if (nfo->depth != 8) {
     throw Fatal("[write_palette_in_table] image file '%s' palette is not 8 bits", fname.c_str());
   }
+  if (nfo->colormap_chans != 3) {
+    throw Fatal("[write_palette_in_table] image file '%s' palette is not RGB", fname.c_str());
+  }
   uchar* ptr = nfo->colormap;
   ForIndex(idx, 256) {
       uint32_t v = 0;
-      ForIndex(c, 3) {
-        v = (v << component_depth) | ((*(uint8_t*)(ptr++) >> (8 - component_depth)) & ((1 << component_depth) - 1));
+      if ((uint)idx < nfo->colormap_size) {
+        ForIndex(c, 3) {
+          v = (v << component_depth) | ((*(uint8_t *)(ptr++) >> (8 - component_depth)) & ((1 << component_depth) - 1));
+        }
       }
       g_LuaOutputs[L] << std::to_string(v) << ",";
   }
@@ -281,7 +297,7 @@ static luabind::object lua_get_palette_as_table(lua_State* L, std::string str, i
     throw Fatal("[get_palette_as_table] internal error");
   }
   if (component_depth < 0 || component_depth > 8) {
-    throw Fatal("[get_palette_as_table] component depth can only in ]0,8]");
+    throw Fatal("[get_palette_as_table] component depth can only be in ]0,8]");
   }
   LuaPreProcessor *lpp   = P->second;
   std::string      fname = lpp->findFile(str);
@@ -295,12 +311,17 @@ static luabind::object lua_get_palette_as_table(lua_State* L, std::string str, i
   if (nfo->depth != 8) {
     throw Fatal("[get_palette_as_table] image file '%s' palette is not 8 bits", fname.c_str());
   }
+  if (nfo->colormap_chans != 3) {
+    throw Fatal("[write_palette_in_table] image file '%s' palette is not RGB", fname.c_str());
+  }
   luabind::object ltbl = luabind::newtable(L);
   uchar* ptr = nfo->colormap;
   ForIndex(idx, 256) {
     uint32_t v = 0;
-    ForIndex(c, 3) {
-      v = (v << component_depth) | ((*(uint8_t*)(ptr++) >> (8 - component_depth)) & ((1 << component_depth) - 1));
+    if ((uint)idx < nfo->colormap_size) {
+      ForIndex(c, 3) {
+        v = (v << component_depth) | ((*(uint8_t *)(ptr++) >> (8 - component_depth)) & ((1 << component_depth) - 1));
+      }
     }
     ltbl[1 + idx] = v;
   }
@@ -326,7 +347,7 @@ static luabind::object lua_get_image_as_table(lua_State* L, std::string str, int
     throw Fatal("[get_image_as_table] internal error");
   }
   if (component_depth < 0 || component_depth > 8) {
-    throw Fatal("[get_image_as_table] component depth can only in ]0,8]");
+    throw Fatal("[get_image_as_table] component depth can only be in ]0,8]");
   }
   LuaPreProcessor *lpp   = P->second;
   std::string      fname = lpp->findFile(str);
@@ -512,6 +533,11 @@ int lua_rshift(int n, int s)
   return n >> s;
 }
 
+int lua_clog2(int w)
+{
+  return Utils::justHigherPow2(w);
+}
+
 // -------------------------------------------------
 
 static void bindScript(lua_State *L)
@@ -537,6 +563,7 @@ static void bindScript(lua_State *L)
       luabind::def("get_palette_as_table", &lua_get_palette_as_table_simple),
       luabind::def("save_table_as_image", &lua_save_table_as_image),
       luabind::def("save_table_as_image_with_palette", &lua_save_table_as_image_with_palette),
+      luabind::def("clog2",         &lua_clog2),
       luabind::def("lshift",        &lua_lshift),
       luabind::def("rshift",        &lua_rshift)
     ];
@@ -574,6 +601,15 @@ std::string robustExtractPath(const std::string& path)
 
 // -------------------------------------------------
 
+void LuaPreProcessor::enableFilesReport(std::string fname)
+{
+  m_FilesReportName = fname;
+  // create report file, will delete if existing
+  std::ofstream freport(m_FilesReportName);
+}
+
+// -------------------------------------------------
+
 std::string LuaPreProcessor::processCode(
   std::string parent_path,
   std::string src_file,
@@ -585,6 +621,12 @@ std::string LuaPreProcessor::processCode(
   }
   if (alreadyIncluded.find(src_file) != alreadyIncluded.end()) {
     throw Fatal("source file '%s' already included (cyclic dependency)", src_file.c_str());
+  }
+
+  // generate a report with all the loaded files
+  if (!m_FilesReportName.empty()) {
+    std::ofstream freport(m_FilesReportName, std::ios_base::app);
+    freport << std::filesystem::absolute(src_file).string() << '\n';
   }
 
   // add to already included
@@ -599,7 +641,7 @@ std::string LuaPreProcessor::processCode(
 
   m_SearchPaths.push_back(path);
 
-  m_Files.emplace_back(src_file);
+  m_Files.emplace_back(std::filesystem::absolute(src_file).string());
   int src_file_id = (int)m_Files.size() - 1;
 
   ANTLRFileStream   input(src_file);
@@ -614,7 +656,12 @@ std::string LuaPreProcessor::processCode(
     // pre-process
     if (l->lualine() != nullptr) {
 
-      code += l->lualine()->code->getText() + "\n";
+      // code += l->lualine()->code->getText() + "\n";
+      if (auto code_ = l->lualine()->code) {
+        code += code_->getText() + "\n";
+      } else {
+        code += "\n";
+      }
 
     } else if (l->siliceline() != nullptr) {
 
@@ -627,7 +674,7 @@ std::string LuaPreProcessor::processCode(
         if (silcode) {
           code += luaProtectString(silcode->getText());
         }
-        if (luacode) {
+        if (luacode && luacode->code) {
           code += "' .. (" + luacode->code->getText() + ") .. '";
         }
       }
@@ -635,7 +682,7 @@ std::string LuaPreProcessor::processCode(
 
     } else if (l->siliceincl() != nullptr) {
       std::string filename = l->siliceincl()->filename->getText();
-      std::regex  lfname_regex("\\s*\\(\\s*\\'(.+?)\\'\\s*\\)\\s*");
+      std::regex  lfname_regex(".*['\\\"](.*)['\\\"].*");
       std::smatch matches;
       if (std::regex_match(filename, matches, lfname_regex)) {
         std::string fname = matches.str(1).c_str();
@@ -728,7 +775,7 @@ void LuaPreProcessor::run(
   for (auto l : defaultLibraries) {
     std::string libfile = CONFIG.keyValues()["libraries_path"] + "/" + l;
     libfile = findFile(libfile);
-    code = code + "\n" + processCode(CONFIG.keyValues()["libraries_path"],libfile,inclusions);
+    code = code + "\n" + processCode(CONFIG.keyValues()["libraries_path"], libfile, inclusions);
   }
   // parse main file
   code = code + "\n" + processCode("", src_file, inclusions);

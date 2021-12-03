@@ -20,8 +20,8 @@ echo "build script: FRAMEWORK_FILE = $FRAMEWORK_FILE"
 export PATH=$PATH:$SILICE_DIR/../tools/fpga-binutils/mingw64/bin/:$SILICE_DIR
 case "$(uname -s)" in
 MINGW*)
-export PYTHONHOME=/mingw64/bin
-export PYTHONPATH=/mingw64/lib/python3.8/
+# export PYTHONHOME=/mingw64/bin
+# export PYTHONPATH=/mingw64/lib/python3.8/
 export QT_QPA_PLATFORM_PLUGIN_PATH=/mingw64/share/qt5/plugins
 ;;
 *)
@@ -40,8 +40,8 @@ if ! type "nextpnr-ice40" > /dev/null; then
   arachne-pnr -p $BOARD_DIR/icestick.pcf build.blif -o build.txt
   icepack build.txt build.bin
 else
-  yosys -p 'synth_ice40 -top top -json build.json' build.v
-  nextpnr-ice40 --hx1k --json build.json --pcf $BOARD_DIR/icestick.pcf --asc build.asc --package tq144 --freq 12
+  yosys -p 'synth_ice40 -relut -abc9 -top top -json build.json' build.v
+  nextpnr-ice40 --force --hx1k --json build.json --pcf $BOARD_DIR/icestick.pcf --asc build.asc --package tq144 --freq 12
   icepack build.asc build.bin
 fi
 

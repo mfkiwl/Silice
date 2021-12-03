@@ -1,3 +1,30 @@
+/*
+
+Copyright 2019, (C) Sylvain Lefebvre and contributors
+List contributors with: git shortlog -n -s -- <filename>
+
+MIT license
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+(header_2_M)
+
+*/
 `define VERILATOR         1
 `define COLOR_DEPTH       6
 `define SDRAM_WORD_WIDTH 16
@@ -34,7 +61,18 @@ module top(
   output video_vs,
   output [5:0] sdram_word_width,
   output [4:0] video_color_depth,
-  input       clk
+  // SPI screen
+  output oled_clk,
+  output oled_mosi,
+  output oled_dc,
+  output oled_csn,
+  output oled_resn,
+  output [1:0] spiscreen_driver,
+  output [9:0] spiscreen_width,
+  output [9:0] spiscreen_height,
+  // basic
+  input        clk,
+  output [7:0] leds
   );
 
 // this is used by the verilator framework
@@ -67,8 +105,8 @@ wire [7:0]  __main_leds;
 // reset
 
 reg ready = 0;
-reg [3:0] RST_d;
-reg [3:0] RST_q;
+reg [7:0] RST_d = 8'b11111111;
+reg [7:0] RST_q = 8'b11111111;
 
 always @* begin
   RST_d = RST_q >> 1;
@@ -79,7 +117,7 @@ always @(posedge clk) begin
     RST_q <= RST_d;
   end else begin
     ready <= 1;
-    RST_q <= 4'b1111;
+    RST_q <= 8'b11111111;
   end
 end
 
@@ -91,7 +129,7 @@ wire done_main;
 
 M_main __main(
   .clock(clk),
-  .reset(RST_d[0]),
+  .reset(RST_q[0]),
   .out_leds(__main_leds),
 `ifdef SDRAM
   .out_sdram_clock(__main_sdram_clock),
@@ -106,7 +144,7 @@ M_main __main(
   .in_sdram_dq_i(sdram_dq_i),
   .out_sdram_dq_o(__main_sdram_dq_o),
   .out_sdram_dq_en(__main_sdram_dq_en),
-`endif  
+`endif
 `ifdef VGA
   .out_video_clock(__main_video_clock),
   .out_video_r(__main_video_r),
@@ -114,7 +152,17 @@ M_main __main(
   .out_video_b(__main_video_b),
   .out_video_hs(__main_video_hs),
   .out_video_vs(__main_video_vs),
-`endif  
+`endif
+`ifdef OLED
+  .out_oled_clk(oled_clk),
+  .out_oled_mosi(oled_mosi),
+  .out_oled_dc(oled_dc),
+  .out_oled_csn(oled_csn),
+  .out_oled_resn(oled_resn),
+  .out_spiscreen_driver(spiscreen_driver),
+  .out_spiscreen_width(spiscreen_width),
+  .out_spiscreen_height(spiscreen_height),
+`endif
   .in_run(run_main),
   .out_done(done_main)
 );
@@ -137,6 +185,8 @@ assign video_g     = __main_video_g;
 assign video_b     = __main_video_b;
 assign video_hs    = __main_video_hs;
 assign video_vs    = __main_video_vs;
+
+assign leds        = __main_leds;
 
 always @* begin
   if (done_main && !RST_d[0]) $finish;

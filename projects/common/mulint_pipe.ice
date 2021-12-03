@@ -3,6 +3,8 @@
 // Why? The goal is to achieve a multi-cycle multiplication
 // with small combinational chains
 //
+// MIT license, see LICENSE_MIT in Silice repo root
+// https://github.com/sylefeb/Silice
 
 algorithm mulpip(
   input  uint8 m0,
@@ -33,7 +35,7 @@ algorithm mulpip(
         case 2b01: { sum23 = m0 << 2; }
         case 2b11: { sum23 = (m0 << 2) + (m0 << 3); }
       }
-    // } -> {  
+    // } -> {
       switch (m1[4,2]) {
         case 2b00: { }
         case 2b10: { sum45 = m0 << 5; }

@@ -1,26 +1,34 @@
 // -------------------------
+// MIT license, see LICENSE_MIT in Silice repo root
+// https://github.com/sylefeb/Silice
+// @sylefeb 2019
 
 // VGA driver
 $include('../common/vga.ice')
 
 $$if MOJO then
 // Clock
-import('../common/mojo_clk_100_25.v')
+import('../common/plls/mojo_100_25.v')
 $$end
 
 $$if ICESTICK then
 // Clock
-import('../common/icestick_clk_25.v')
+import('../common/plls/icestick_25.v')
 $$end
 
 $$if ICEBREAKER then
 // Clock
-import('../common/icebreaker_clk_25.v')
+import('../common/plls/icebrkr_25.v')
 $$end
 
 $$if DE10NANO then
 // Clock
-import('../common/de10nano_clk_100_25.v')
+import('../common/plls/de10nano_100_25.v')
+$$end
+
+$$if ECPIX5 then
+// Clock
+import('../common/plls/ecpix5_100_25.v')
 $$end
 
 $$if HARDWARE then
@@ -45,7 +53,7 @@ algorithm text_display(
 
   // ---------- font
   // assumes letter_w_sp (defined in font) is an integer divider of 640
-  
+
   $include('../common/font.ice')
   // include('../common/font_small.ice')
 
@@ -67,7 +75,7 @@ algorithm text_display(
 
   int10  frame    = 0;
   uint4  line     = 0;
-  
+
   uint4  stride   = 0;
 
   // ---------- table for text swim
@@ -76,7 +84,7 @@ $$for i=0,63 do
     $math.floor(15.0 * (0.5+0.5*math.sin(2*math.pi*i/63)))$,
 $$end
   };
-  
+
   // ---------- snow
   int10 dotpos = 0;
   int2  speed  = 0;
@@ -84,10 +92,10 @@ $$end
   int12 rand_x = 0;
 
   // ---------- string
-  uint8  str[] = "   HELLO WORLD FROM FPGA #    THIS IS WRITTEN IN SILICE # MY LANGUAGE FOR FPGA DEVEL #FUN AND SIMPLE YET POWERFUL#   --- AVAILABLE ON GITHUB --- ##THIS WAS TESTED ON#-VERILATOR#-ICARUS VERILOG#-MOJO BOARD#-ICESTICK#-ICEBREAKER#-ULX3S#-DE10-NANO";
+  uint8  str[] = "   HELLO WORLD FROM FPGA #    THIS IS WRITTEN IN SILICE # MY LANGUAGE FOR FPGA DEVEL #FUN AND SIMPLE YET POWERFUL#   --- AVAILABLE ON GITHUB --- ##THIS WAS TESTED ON#-VERILATOR#-ICARUS VERILOG#-MOJO BOARD#-ICESTICK#-ICEBREAKER#-ULX3S#-DE10-NANO#-ECPIX-5";
 
   // --------- print string
-  subroutine print_string( 
+  subroutine print_string(
 	  reads      str,
 	  reads      str_x,
 	  readwrites str_y,
@@ -107,7 +115,7 @@ $$end
         switch (str[col]) { // some ASCII to font translation
           case 32: {lttr = 36;}
           case 45: {lttr = 37;}
-          case 51: {lttr = 3;}          
+          case 51: {lttr = 3;}
           default: {
             if (str[col] <= 57) {
               lttr = str[col] - 48;
@@ -143,31 +151,31 @@ $$end
   txt_wenable = 0;
 
   // ---------- show time!
-  
+
   while (1) {
 
 	  // write lines in buffer
-    
+
     str_y = 0;
     () <- print_string <- ();
-    
+
     // wait until vblank is over
-    
+
 	  while (pix_vblank == 1) { }
     frame = frame + 1;
 
 	  // display frame
-    
-    text_i   = 0;  
+
+    text_i   = 0;
     text_j   = 0;
     letter_i = 0;
     letter_j = 0;
-    
+
 	  while (pix_vblank == 0) {
 
       if (pix_active) {
 
-        // background snow effect        
+        // background snow effect
         if (pix_x == 0) {
           rand_x = 1;
         } else {
@@ -179,14 +187,14 @@ $$end
           pix_red   = ($color_max$);
           pix_green = ($color_max$);
           pix_blue  = ($color_max$);
-        }        
-        
+        }
+
         // text
         stride = wave[pix_y[2,6] + frame[0,6]];
-        if (pix_x >= 192 + stride && pix_y > 64) {        
-        
+        if (pix_x >= 192 + stride && pix_y > 64) {
+
           if (letter_j < $letter_h$ && letter_i < $letter_w$) {
-            addr     = letter_i + (letter_j << $letter_w_pow2$) 
+            addr     = letter_i + (letter_j << $letter_w_pow2$)
                       + (txt_rdata * $letter_w*letter_h$);
             pixel    = letters[ addr ];
             if (pixel == 1) {
@@ -215,7 +223,7 @@ $$end
               }
             }
           }
-          
+
           letter_i = letter_i + 1;
           if (letter_i == $letter_w_sp$) { // end of letter
             letter_i = 0;
@@ -223,7 +231,7 @@ $$end
               text_i = text_i + 1;
             }
           }
-          
+
           if (pix_x == 639) {  // end of line
             // back to first column
             text_i   = 0;
@@ -240,10 +248,10 @@ $$end
 
           txt_addr = text_i + (text_j << 5);
 
-        }      
+        }
 
 
-      }		
+      }
 	  }
 
   }
@@ -259,12 +267,12 @@ $$end
   output! uint$color_depth$ video_r,
   output! uint$color_depth$ video_g,
   output! uint$color_depth$ video_b,
-  output! uint1 video_hs,
-  output! uint1 video_vs
-) 
+  output  uint1 video_hs,
+  output  uint1 video_vs
+)
 $$if HARDWARE and not ULX3S then
 // on an actual board, the video signal is produced by a PLL
-<@video_clock,!video_reset> 
+<@video_clock,!video_reset>
 $$end
 {
 
@@ -274,21 +282,20 @@ $$if HARDWARE and not ULX3S then
 $$if MOJO then
   uint1 sdram_clock = 0;
   // --- clock
-  clk_100_25 clk_gen (
+  pll_100_25 clk_gen (
     CLK_IN1  <: clock,
     CLK_OUT1 :> sdram_clock,
     CLK_OUT2 :> video_clock
   );
 $$elseif ICESTICK then
   // --- clock
-  icestick_clk_25 clk_gen (
+  pll clk_gen (
     clock_in  <: clock,
-    clock_out :> video_clock,
-    lock      :> led4
+    clock_out :> video_clock
   );
 $$elseif ICEBREAKER then
   // --- clock
-  icebreaker_clk_25 clk_gen (
+  pll clk_gen (
     clock_in  <: clock,
     clock_out :> video_clock
   );
@@ -296,13 +303,23 @@ $$elseif DE10NANO then
   // --- clock
   uint1 sdram_clock = 0;
   uint1 pll_lock    = 0;
-  de10nano_clk_100_25 clk_gen(
+  pll_100_25 clk_gen(
     refclk   <: clock,
     rst      <: reset,
     outclk_0 :> sdram_clock,
     outclk_1 :> video_clock,
     locked   :> pll_lock
-  );   
+  );
+$$elseif ECPIX5 then
+  // --- clock
+  uint1 sdram_clock = 0;
+  uint1 pll_lock = 0;
+  pll_100_25 clk_gen(
+    clkin    <: clock,
+    clkout0  :> sdram_clock,
+    clkout1  :> video_clock,
+    locked   :> pll_lock
+  );
 $$end
   // --- video reset
   clean_reset vga_rstcond<@video_clock,!reset>(
@@ -315,7 +332,7 @@ $$end
   uint10 pix_x  = 0;
   uint10 pix_y  = 0;
 
-  vga vga_driver 
+  vga vga_driver
   (
     vga_hs :> video_hs,
 	  vga_vs :> video_vs,
@@ -355,6 +372,5 @@ $$else
   // forever
   while (1) { }
 $$end
-  
-}
 
+}

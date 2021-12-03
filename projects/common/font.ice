@@ -1,3 +1,6 @@
+// @sylefeb 2019
+// https://github.com/sylefeb/Silice
+// MIT license, see LICENSE_MIT in Silice repo root
 
 $$letter_w_pow2 = 3
 $$letter_w      = 8

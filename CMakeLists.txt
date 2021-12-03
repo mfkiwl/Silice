@@ -85,6 +85,12 @@ ADD_EXECUTABLE(silice
   src/TypesAndConsts.h
   src/ExpressionLinter.cpp
   src/ExpressionLinter.h
+  src/RISCVSynthesizer.cpp
+  src/RISCVSynthesizer.h
+  src/Utils.cpp
+  src/Utils.h
+  src/Blueprint.cpp
+  src/Blueprint.h
   antlr/siliceParser.cpp
   antlr/siliceParser.h
   antlr/siliceLexer.cpp
@@ -115,6 +121,14 @@ add_subdirectory(src/libs/lua)
 add_subdirectory(src/libs/luabind-deboostified)
 
 target_link_libraries(silice antlr4_static lua luabind)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 8)
+    message(FATAL_ERROR "Silice requires g++ 8 at least")
+  elseif(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+    target_link_libraries(silice stdc++fs)
+  endif()
+endif()
 
 if(WIN32)
 target_link_libraries(silice shlwapi)

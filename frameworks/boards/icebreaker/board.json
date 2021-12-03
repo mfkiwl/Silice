@@ -4,11 +4,15 @@
     {
       "name"      : "configurable",
       "framework" : "icebreaker.v",
-      "pins"      : [         
+      "pins"      : [
         {"set"    : "basic"},
         {"set"    : "buttons", "define" : "BUTTONS=1"},
         {"set"    : "uart", "define" : "UART=1"},
-        {"set"    : "vga", "define" : "VGA=1"} 
+        {"set"    : "vga", "define" : "VGA=1"},
+        {"set"    : "oled", "define" : "OLED=1"},
+        {"set"    : "pmod", "define" : "PMOD=1"},
+        {"set"    : "spiflash", "define" : "SPIFLASH=1"},
+        {"set"    : "qspiflash", "define" : "QSPIFLASH=1"}
       ],
       "builders": [
         {
@@ -17,7 +21,8 @@
           "tool": "icestorm",
           "tool_options": [
             {
-                "nextpnr_options": ["--up5k", "--freq 13", "--package sg48", "--timing-allow-fail"],
+                "yosys_synth_options": ["-dsp","-abc9","-device u"],
+                "nextpnr_options": ["--up5k", "--freq 12", "--package sg48", "--timing-allow-fail"],
                 "pnr": "next"
             }
           ],
@@ -30,7 +35,7 @@
           "command" : "icebreaker.sh",
           "description": "Custom shell scripts using yosys and nextpnr"
         }
-      ]    
+      ]
     }
   ],
   "pins": {
@@ -40,7 +45,7 @@
           "type": "uint5",
           "io": "output"
         }
-    ],    
+    ],
     "buttons": [
       {
         "name": "btns",
@@ -85,6 +90,94 @@
         "name": "vga_b",
         "type": "uint6",
         "io": "output"
+      }
+    ],
+    "oled": [
+      {
+        "name": "oled_clk",
+        "type": "uint1",
+        "io": "output"
+      },
+      {
+        "name": "oled_mosi",
+        "type": "uint1",
+        "io": "output"
+      },
+      {
+        "name": "oled_csn",
+        "type": "uint1",
+        "io": "output"
+      },
+      {
+        "name": "oled_resn",
+        "type": "uint1",
+        "io": "output"
+      },
+      {
+        "name": "oled_dc",
+        "type": "uint1",
+        "io": "output"
+      }
+    ],
+    "pmod": [
+      {
+        "name": "pmod",
+        "type": "uint8",
+        "io"  : "input_output"
+      }
+    ],
+    "spiflash": [
+      {
+        "name" : "sf_clk",
+        "type" : "uint1",
+        "io"   : "output"
+      },
+      {
+        "name" : "sf_csn",
+        "type" : "uint1",
+        "io"   : "output"
+      },
+      {
+        "name" : "sf_mosi",
+        "type" : "uint1",
+        "io"   : "output"
+      },
+      {
+        "name" : "sf_miso",
+        "type" : "uint1",
+        "io"   : "input"
+      }
+    ],
+    "qspiflash": [
+      {
+        "name" : "sf_clk",
+        "type" : "uint1",
+        "io"   : "output"
+      },
+      {
+        "name" : "sf_csn",
+        "type" : "uint1",
+        "io"   : "output"
+      },
+      {
+        "name" : "sf_io0",
+        "type" : "uint1",
+        "io"   : "input_output"
+      },
+      {
+        "name" : "sf_io1",
+        "type" : "uint1",
+        "io"   : "input_output"
+      },
+      {
+        "name" : "sf_io2",
+        "type" : "uint1",
+        "io"   : "input_output"
+      },
+      {
+        "name" : "sf_io3",
+        "type" : "uint1",
+        "io"   : "input_output"
       }
     ]
   }

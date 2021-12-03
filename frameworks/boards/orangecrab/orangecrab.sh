@@ -1,7 +1,7 @@
 #!/bin/bash
 
 case "$(uname -s)" in
-MINGW*|CYGWIN*) 
+MINGW*|CYGWIN*)
 SILICE_DIR=`cygpath $SILICE_DIR`
 BUILD_DIR=`cygpath $BUILD_DIR`
 FRAMEWORKS_DIR=`cygpath $FRAMEWORKS_DIR`
@@ -20,8 +20,8 @@ echo "build script: FRAMEWORK_FILE = $FRAMEWORK_FILE"
 export PATH=$PATH:$SILICE_DIR/../tools/fpga-binutils/mingw64/bin/:$SILICE_DIR
 case "$(uname -s)" in
 MINGW*)
-export PYTHONHOME=/mingw64/bin
-export PYTHONPATH=/mingw64/lib/python3.8/
+# export PYTHONHOME=/mingw64/bin
+# export PYTHONPATH=/mingw64/lib/python3.8/
 export QT_QPA_PLATFORM_PLUGIN_PATH=/mingw64/share/qt5/plugins
 ;;
 *)
@@ -33,9 +33,11 @@ rm build*
 
 silice --frameworks_dir $FRAMEWORKS_DIR -f $FRAMEWORK_FILE -o build.v $1 "${@:2}"
 
-yosys -p 'synth_ecp5 -abc9 -json build.json' build.v
+yosys -p 'synth_ecp5 -abc9 -nowidelut -json build.json' build.v
 
-nextpnr-ecp5 --25k --package CSFBGA285 --json build.json --textcfg build.config --lpf $BOARD_DIR/pinout.lpf --timing-allow-fail --freq 38.8
+nextpnr-ecp5 --25k --package CSFBGA285 --json build.json --textcfg build.config\
+             --lpf $BOARD_DIR/pinout.lpf --timing-allow-fail --freq 38.8\
+             --lpf-allow-unconstrained
 
 ecppack --freq 38.8 --compress build.config build.bit
 

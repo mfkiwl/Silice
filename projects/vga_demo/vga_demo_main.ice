@@ -1,33 +1,40 @@
 // SL 2020-04-23
 // Main file for all vga demo projects
 // -------------------------
+// MIT license, see LICENSE_MIT in Silice repo root
+// https://github.com/sylefeb/Silice
 
 // VGA driver
 $include('../common/vga.ice')
 
 $$if CROSSLINKNX_EVN then
 // Clock
-import('../common/crosslink_nx_evn_clk_25.v')
+import('../common/plls/crosslink_nx_evn_25.v')
 $$end
 
 $$if MOJO then
 // Clock
-import('../common/mojo_clk_100_25.v')
+import('../common/plls/mojo_100_25.v')
 $$end
 
-$$if ICEBREAKER then
+$$if ICEBREAKER or ICEBITSY then
 // Clock
-import('../common/icebreaker_clk_25.v')
+import('../common/plls/icebrkr_25.v')
 $$end
 
 $$if ICESTICK then
 // Clock
-import('../common/icestick_clk_25.v')
+import('../common/plls/icestick_25.v')
 $$end
 
 $$if DE10NANO then
 // Clock
-import('../common/de10nano_clk_100_25.v')
+import('../common/plls/de10nano_100_25.v')
+$$end
+
+$$if ECPIX5 then
+// Clock
+import('../common/plls/ecpix5_100_25.v')
 $$end
 
 $$if HARDWARE then
@@ -45,11 +52,11 @@ algorithm pll(
 {
   uint3 counter = 0;
   uint8 trigger = 8b11111111;
-  
+
   video_clock   := counter[1,1]; // x4 slower (25 MHz)
   video_reset   := (trigger > 0);
-  
-  always {	  
+
+  always {
     counter = counter + 1;
 	  trigger = trigger >> 1;
   }
@@ -59,21 +66,21 @@ $$end
 // -------------------------
 
 algorithm main(
-  output! uint$NUM_LEDS$    leds,
+  output  uint$NUM_LEDS$    leds,
 $$if BUTTONS then
   input   uint$NUM_BTNS$    btns,
 $$end
   output! uint$color_depth$ video_r,
   output! uint$color_depth$ video_g,
   output! uint$color_depth$ video_b,
-  output! uint1             video_hs,
-  output! uint1             video_vs,
+  output  uint1             video_hs,
+  output  uint1             video_vs,
 $$if SIMULATION then
-  output! uint1             video_clock,
+  output  uint1             video_clock,
 $$end
-) 
+)
 $$if not ULX3S then
-<@video_clock,!video_reset> 
+<@video_clock,!video_reset>
 $$end
 {
   uint1 video_reset = 0;
@@ -83,7 +90,7 @@ $$if HARDWARE then
 $$if MOJO then
   uint1 sdram_clock = 0;
   // --- clock
-  clk_100_25 clk_gen (
+  pll_100_25 clk_gen (
     CLK_IN1  <: clock,
     CLK_OUT1 :> sdram_clock,
     CLK_OUT2 :> video_clock
@@ -91,7 +98,7 @@ $$if MOJO then
 $$elseif CROSSLINKNX_EVN then
   // --- clock
   uint1 pll_lock    = 0;
-  crosslink_nx_evn_clk_25 clk_gen (
+  pll clk_gen (
     clki_i  <: clock,
     rst_i   <: reset,
     clkop_o :> video_clock,
@@ -100,14 +107,14 @@ $$elseif CROSSLINKNX_EVN then
 $$elseif ICESTICK then
   // --- clock
   uint1 pll_lock    = 0;
-  icestick_clk_25 clk_gen (
+  pll clk_gen (
     clock_in  <: clock,
     clock_out :> video_clock,
     lock      :> pll_lock
   );
-$$elseif ICEBREAKER then
+$$elseif ICEBREAKER or ICEBITSY then
   // --- clock
-  icebreaker_clk_25 clk_gen (
+  pll clk_gen (
     clock_in  <: clock,
     clock_out :> video_clock
   );
@@ -115,13 +122,23 @@ $$elseif DE10NANO then
   // --- clock
   uint1 sdram_clock = 0;
   uint1 pll_lock    = 0;
-  de10nano_clk_100_25 clk_gen(
+  pll_100_25 clk_gen(
     refclk   <: clock,
     rst      <: reset,
     outclk_0 :> sdram_clock,
     outclk_1 :> video_clock,
     locked   :> pll_lock
-  ); 
+  );
+$$elseif ECPIX5 then
+  // --- clock
+  uint1 sdram_clock = 0;
+  uint1 pll_lock = 0;
+  pll_100_25 clk_gen(
+    clkin    <: clock,
+    clkout0  :> sdram_clock,
+    clkout1  :> video_clock,
+    locked   :> pll_lock
+  );
 $$end
   // --- video reset
   clean_reset vga_rstcond<@video_clock,!reset>(
@@ -132,7 +149,7 @@ $$else
   pll clockgen<@clock,!reset>(
     video_clock   :> video_clock,
     video_reset   :> video_reset,
-  );  
+  );
 $$end
 
   uint1  active = 0;
@@ -162,14 +179,14 @@ $$end
 
   uint8 frame  = 0;
 
-$$if SIMULATION then
+$$if ICARUS then
   // we count a number of frames and stop
   while (frame < 32) {
 $$else
   // forever
   while (1) {
 $$end
-  
+
     while (vblank == 1) { }
 	  $display("vblank off");
     while (vblank == 0) { }

@@ -6,7 +6,10 @@ import json
 import argparse
 import platform
 import sysconfig
-from termcolor import colored
+# from termcolor import colored
+
+def colored(str,clr,attrs=0):
+  return str
 
 # command line
 parser = argparse.ArgumentParser(description='silice-make is the Silice build tool')
@@ -17,6 +20,7 @@ parser.add_argument('-p','--pins', help="Pins used in the design, comma separate
 parser.add_argument('-o','--outdir', help="Specify name of output directory.", default="BUILD")
 parser.add_argument('-l','--list_boards', help="List all available target boards.", action="store_true")
 parser.add_argument('-r','--root', help="Root directory, use to override default frameworks.")
+parser.add_argument('-D','--defines', help="List of comma-separated defines to pass to Silice, e.g. -D A=0,B=1")
 parser.add_argument('--no_build', help="Only generate verilog output file.", action="store_true")
 parser.add_argument('--no_program', help="Only generate verilog output file and build bitstream.",
                     action="store_true")
@@ -172,11 +176,17 @@ print('using build system    ',colored(target_builder['builder'],'cyan'))
 framework_file = os.path.realpath(os.path.join(board_path,target_variant['framework']))
 os.environ["FRAMEWORK_FILE"] = framework_file
 
+# options
+if args.no_build:
+    os.environ["NO_BUILD"] = "1"
+if args.no_program:
+    os.environ["NO_PROGRAM"] = "1"
+
 # ok, build!
 
 # convenience: under Windows/mingw extend path with known typical locations
 if platform.system() == "Windows":
-    if sysconfig.get_platform() == "mingw":
+    if sysconfig.get_platform().startswith("mingw"):
       os.environ["PATH"] += os.pathsep + os.path.realpath(make_dir)
       os.environ["PATH"] += os.pathsep + os.path.realpath(os.path.join(make_dir,"../tools/fpga-binutils/mingw64/bin/"))
       os.environ["PATH"] += os.pathsep + os.path.realpath("c:/intelFPGA_lite/19.1/quartus/bin64/")
@@ -187,7 +197,7 @@ if target_builder['builder'] == 'shell':
 
     # system checks
     if platform.system() == "Windows":
-        if not sysconfig.get_platform() == "mingw":
+        if not sysconfig.get_platform().startswith("mingw"):
             print(colored("to build from scripts please run MinGW python from a shell",'red'))
             sys.exit(-1)
 
@@ -211,11 +221,18 @@ if target_builder['builder'] == 'shell':
                       os.environ[key_value[0]] = key_value[1]
                     elif len(key_value) == 1:
                       os.environ[key_value[0]] = 1
+    # adding command line defines
+    if args.defines:
+        for define in args.defines.split(','):
+            defines = defines + " -D " + define
     # execute
     command = script + " " + source_file
     print('launching command     ', colored(command,'cyan'))
-    bash = "env bash"
-    os.system(bash + " " + command + " " + defines)
+    if platform.system() == "Windows":
+        bash = "env bash"
+        os.system(bash + " " + command + " " + defines)
+    else:
+        os.system(command + " " + defines)
 
 elif target_builder['builder'] == 'edalize':
 
@@ -244,7 +261,6 @@ elif target_builder['builder'] == 'edalize':
             else:
                 if 'define' in variant_pin_sets[pin_set]:
                     defines[pin_set] = variant_pin_sets[pin_set]['define']
-
     # prepare edam structure                    
     edam = {'name' : 'build',
             'files': files,
@@ -279,7 +295,11 @@ elif target_builder['builder'] == 'edalize':
         for d in defines:
             cmd.append("-D")
             cmd.append(defines[d])
-
+        # adding command line defines
+        if args.defines:
+            for define in args.defines.split(','):
+                cmd.append("-D")
+                cmd.append(define)
         try:
             subprocess.check_call(cmd, cwd=out_dir, env=my_env, stdin=subprocess.PIPE)
         except FileNotFoundError as e:

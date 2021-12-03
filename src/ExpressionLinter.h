@@ -1,18 +1,25 @@
 /*
 
     Silice FPGA language and compiler
-    (c) Sylvain Lefebvre - @sylefeb
+    Copyright 2019, (C) Sylvain Lefebvre and contributors 
 
-This work and all associated files are under the
+    List contributors with: git shortlog -n -s -- <filename>
 
-     GNU AFFERO GENERAL PUBLIC LICENSE
-        Version 3, 19 November 2007
+    GPLv3 license, see LICENSE_GPLv3 in Silice repo root
 
-With the additional clause that the copyright notice
-above, identitfying the author and original copyright
-holder must remain included in all distributions.
+This program is free software: you can redistribute it and/or modify it 
+under the terms of the GNU General Public License as published by the 
+Free Software Foundation, either version 3 of the License, or (at your option) 
+any later version.
 
-(header_1_0)
+This program is distributed in the hope that it will be useful, but WITHOUT 
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with 
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+(header_2_G)
 */
 #pragma once
 // -------------------------------------------------
@@ -26,12 +33,9 @@ holder must remain included in all distributions.
 
 // -------------------------------------------------
 
-class LuaPreProcessor;
-
-// -------------------------------------------------
-
 namespace Silice
 {
+  class LuaPreProcessor;
 
   // -------------------------------------------------
 
@@ -40,12 +44,14 @@ namespace Silice
   {
   private:
 
+    /// \brief Host algorithm
     const Algorithm *m_Host;
 
-    bool m_WarnAssignWidth = false;
+    /// \brief Instantiation context for parameterized VIOs
+    const Algorithm::t_instantiation_context& m_Ictx;
 
-    /// \brief issues a warning
-    void warn(antlr4::misc::Interval interval, int line, const char *msg, ...) const;
+    /// \brief Does the Linter warn about width mismatches in assignments? (there are very frequent)
+    bool m_WarnAssignWidth = false;
 
     /// \brief check concatenation consistency
     void checkConcatenation(
@@ -88,15 +94,12 @@ namespace Silice
       const Algorithm::t_combinational_block_context *bctx,
       t_type_nfo& _nfo) const;
 
-    /// \brief Token stream for warning reporting, optionally set
-    static antlr4::TokenStream *s_TokenStream;
-    /// \brief Pre-processor for warning line reporting, optionally set
-    static LuaPreProcessor     *s_LuaPreProcessor;
+    /// \brief resolves a parameterized VIO knowing the instantiation context
+    void resolveParameterized(std::string idnt, const Algorithm::t_combinational_block_context *bctx, t_type_nfo &_nfo) const;
 
   public:
 
-
-    ExpressionLinter(const Algorithm *host) : m_Host(host) {}
+    ExpressionLinter(const Algorithm *host, const Algorithm::t_instantiation_context& ictx) : m_Host(host), m_Ictx(ictx) { }
 
     /// \brief Lint an expression
     void lint(
@@ -108,7 +111,12 @@ namespace Silice
       siliceParser::AccessContext                    *access,
       antlr4::tree::TerminalNode                     *identifier,
       siliceParser::Expression_0Context              *expr,
-      const Algorithm::t_combinational_block_context *bctx) const;
+      const Algorithm::t_combinational_block_context *bctx,
+      bool                                            wire_definition = false) const;
+
+    /// \brief Lint a wire assignment
+    void lintWireAssignment(
+      const Algorithm::t_instr_nfo& wire_assign) const;
 
     /// \brief Lint an input parameter
     void lintInputParameter(
@@ -132,18 +140,6 @@ namespace Silice
       const t_type_nfo                               &left,
       const t_type_nfo                               &right
       ) const;
-
-    /// \brief set the token stream
-    static void setTokenStream(antlr4::TokenStream *tks)
-    {
-      s_TokenStream = tks;
-    }
-
-    /// \brief set the pre-processor
-    static void setLuaPreProcessor(LuaPreProcessor *lpp)
-    {
-      s_LuaPreProcessor = lpp;
-    }
 
   };
 

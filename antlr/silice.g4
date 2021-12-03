@@ -1,17 +1,25 @@
 /*
 
     Silice FPGA language and compiler
-    (c) Sylvain Lefebvre - @sylefeb
+    Copyright 2019, (C) Sylvain Lefebvre and contributors 
 
-This work and all associated files are under the
+    List contributors with: git shortlog -n -s -- <filename>
 
-     GNU AFFERO GENERAL PUBLIC LICENSE
-        Version 3, 19 November 2007
-        
-A copy of the license full text is included in 
-the distribution, please refer to it for details.
+    GPLv3 license, see LICENSE_GPLv3 in Silice repo root
 
-(header_1_0)
+This program is free software: you can redistribute it and/or modify it 
+under the terms of the GNU General Public License as published by the 
+Free Software Foundation, either version 3 of the License, or (at your option) 
+any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT 
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with 
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+(header_2_G)
 */
 
 grammar silice;
@@ -33,13 +41,14 @@ GOTO                : 'goto' ;
 AUTORUN             : 'autorun' ;
 
 ONEHOT              : 'onehot' ;
+SWITCH              : 'switch' ;
 
 READ                : 'reads' ;
 WRITE               : 'writes' ;
 READWRITE           : 'readwrites' ;
 CALLS               : 'calls' ;
 
-FILENAME            : '\'' (DIGIT|LETTERU|'.'|'/')* '\'' ;
+FILENAME            : '\'' (DIGIT|LETTERU|'.'|'/'|'-')* '\'' ;
 
 REPEATCNT           : NUMBER 'x' ;
 
@@ -47,19 +56,22 @@ SUB                 : 'subroutine' ;
 
 RETURN              : 'return' ;
 
-CALL                : 'call' ;
-
 BREAK               : 'break' ;
 
 DISPLAY             : '$display' | '__display' ;
 
 DISPLWRITE          : '__write' ;
 
+FINISH              : '__finish' ;
+
 TOSIGNED            : '__signed' ;
 
 TOUNSIGNED          : '__unsigned' ;
 
-ALWAYS              : 'always' ;
+DONE                : 'isdone' ;
+
+ALWAYS              : 'always' | 'always_before' ;
+ALWAYS_AFTER        : 'always_after' ;
 
 BRAM                : 'bram' ;
 
@@ -83,9 +95,33 @@ INPUT               : 'input' ;
 
 OUTPUT              : 'output' ;
 
+OUTPUTS             : 'outputs' ;
+
 UNINITIALIZED       : 'uninitialized' | 'uninitialised' ;
 
 PAD                 : 'pad' ;
+
+FILE                : 'file' ;
+
+COMPILE             : 'compile' ;
+
+RISCV               : 'riscv' ;
+
+ASSERT              : '#assert' ;
+
+ASSUME              : '#assume' ;
+
+RESTRICT            : '#restrict';
+
+WASAT               : '#wasin';
+
+ASSERTSTABLE        : '#assertstable';
+
+ASSUMESTABLE        : '#assumestable';
+
+STABLEINPUT         : '#stableinput';
+
+COVER               : '#cover';
 
 DEFAULT             : 'default' (' ' | '\t')* ':';
 
@@ -101,6 +137,10 @@ AUTO                : '<:auto:>' ;
 
 ALWSASSIGNDBL       : '::=' ;
 ALWSASSIGN          : ':=' ;
+
+OUTASSIGN           : '^=' ;
+
+HASH                : '#';
 
 IDENTIFIER          : LETTER+ (DIGIT|LETTERU)* ;
 
@@ -120,7 +160,7 @@ NEXT                : '++:' ;
 
 ATTRIBS             : '(*' ~[\r\n]* '*)' ;
 
-STRING              : '"' ~[\r\n"]* '"' ;
+STRING              : '"' ~[\r\n"]* '"' ; // '; // antlr-mode is broken and does not handle literal `"` in selectors
 
 ERROR_CHAR          : . ; // catch-all to move lexer errors to parser
 
@@ -136,31 +176,37 @@ sclock              :  '@' IDENTIFIER ;
 sreset              :  '!' IDENTIFIER ;
 sautorun            :  AUTORUN ;
 sonehot             :  ONEHOT ;
-sstacksz            :  'stack:' NUMBER ;
+sreginput           :  'reginputs' ;
+sstacksz            :  'stack:' NUMBER ; // deprecated
+sformdepth          :  '#depth' '=' NUMBER ;
+sformtimeout        :  '#timeout' '=' NUMBER ;
+sformmode           :  '#mode' '=' IDENTIFIER ('&' IDENTIFIER)* ;
 
-algModifier         : sclock | sreset | sautorun | sonehot | sstacksz ;
-algModifiers        : '<' algModifier (',' algModifier)* '>' ;
+bpModifier          : sclock | sreset | sautorun | sonehot | sstacksz | sformdepth | sformtimeout | sformmode | sreginput ;
+bpModifiers         : '<' bpModifier (',' bpModifier)* '>' ;
 
 pad                 : PAD '(' (value | UNINITIALIZED) ')' ;
-
-initList            : '{' value (',' value)* (',' pad)? ','? '}' | '{' pad '}'  | '{' '}' ;
+file                : FILE '(' STRING ')' ;
+initList            : '{' value (',' value)* (',' pad)? ','? '}' | '{' (file ',')? pad '}'  | '{' '}' ;
 
 memNoInputLatch     : 'input' '!' ;
 memDelayed          : 'delayed' ;
 memClocks           : (clk0=sclock ',' clk1=sclock) ;
-memModifier         : memClocks | memNoInputLatch | memDelayed ;
+memModifier         : memClocks | memNoInputLatch | memDelayed | STRING;
 memModifiers        : '<' memModifier (',' memModifier)* ','? '>' ;
 
-type                 : TYPE | (SAMEAS '(' base=IDENTIFIER ('.' member=IDENTIFIER)? ')') ;
-declarationWire      : type alwaysAssigned;
-declarationVar       : type IDENTIFIER ('=' (value | UNINITIALIZED))? ATTRIBS? ;
-declarationTable     : type IDENTIFIER '[' NUMBER? ']' ('=' (initList | STRING | UNINITIALIZED))? ;
-declarationMemory    : (BRAM | BROM | DUALBRAM | SIMPLEDUALBRAM) TYPE name=IDENTIFIER memModifiers? '[' NUMBER? ']' ('=' (initList | STRING | UNINITIALIZED))? ;
-declarationGrpModAlg : modalg=IDENTIFIER name=IDENTIFIER algModifiers? ( '(' modalgBindingList ')' ) ? ;
-declaration          : declarationVar | declarationGrpModAlg | declarationTable | declarationMemory | declarationWire;
+type                   : TYPE | (SAMEAS '(' base=IDENTIFIER ('.' member=IDENTIFIER)? ')') ;
+declarationWire        : type alwaysAssigned;
+declarationVarInitSet  : '=' (value | UNINITIALIZED) ;
+declarationVarInitCstr : '(' (value | UNINITIALIZED) ')';
+declarationVar         : type IDENTIFIER ( declarationVarInitSet | declarationVarInitCstr )? ATTRIBS? ;
+declarationTable       : type IDENTIFIER '[' NUMBER? ']' ('=' (initList | STRING | UNINITIALIZED))? ;
+declarationMemory      : (BRAM | BROM | DUALBRAM | SIMPLEDUALBRAM) TYPE name=IDENTIFIER memModifiers? '[' NUMBER? ']' ('=' (initList | STRING | UNINITIALIZED))? ;
+declarationInstance    : blueprint=IDENTIFIER name=IDENTIFIER bpModifiers? ( '(' bpBindingList ')' ) ? ;
+declaration            : declarationVar | declarationInstance | declarationTable | declarationMemory | declarationWire;
 
-modalgBinding        : left=IDENTIFIER (LDEFINE | LDEFINEDBL | RDEFINE | BDEFINE | BDEFINEDBL) right=idOrIoAccess | AUTO;
-modalgBindingList    : modalgBinding ',' modalgBindingList | modalgBinding | ;
+bpBinding              : left=IDENTIFIER (LDEFINE | LDEFINEDBL | RDEFINE | BDEFINE | BDEFINEDBL) right=idOrAccess | AUTO;
+bpBindingList          : bpBinding ',' bpBindingList | bpBinding | ;
 
 /* -- io lists -- */
 
@@ -247,12 +293,10 @@ expression_10        : expression_10 (
                     | unaryExpression ;
 
 unaryExpression     : (
-                    '-' | '!' | '~&' | '~|' | '&' | '|' | '^~'| '~^' | '~'
+                    '-' | '!' | '~&' | '~|' | '&' | '|' | '^' | '^~'| '~^' | '~'
 					) atom | atom ;
 
-concatexpr          : expression_0 | NUMBER concatenation ;
-
-concatenation       : '{' concatexpr (',' concatexpr)* '}' ;
+concatenation       : '{' (NUMBER concatenation | expression_0 (',' expression_0)*) '}';
 
 atom                : CONSTANT 
                     | NUMBER 
@@ -263,27 +307,29 @@ atom                : CONSTANT
                     | TOSIGNED '(' expression_0 ')'
                     | TOUNSIGNED '(' expression_0 ')'
                     | WIDTHOF '(' base=IDENTIFIER ('.' member=IDENTIFIER)? ')'
+                    | DONE '(' algo=IDENTIFIER ')'
                     | concatenation ;
 
 /* -- Accesses to VIO -- */
 
-bitfieldAccess      : field=IDENTIFIER '(' idOrIoAccess ')' '.' member=IDENTIFIER ;
+bitfieldAccess      : field=IDENTIFIER '(' (idOrIoAccess | tableAccess) ')' '.' member=IDENTIFIER ;
 ioAccess            : base=IDENTIFIER ('.' IDENTIFIER)+ ;
-bitAccess           : (ioAccess | tableAccess | IDENTIFIER) '[' first=expression_0 ',' num=constValue ']' ;
+partSelect          : (ioAccess | tableAccess | bitfieldAccess | IDENTIFIER) '[' first=expression_0 ',' num=constValue ']' ;
 tableAccess         : (ioAccess | IDENTIFIER) '[' expression_0 ']' ;
-access              : (ioAccess | tableAccess | bitAccess | bitfieldAccess) ; 
+access              : (ioAccess | tableAccess | partSelect | bitfieldAccess) ; 
 
 idOrIoAccess        : (ioAccess | IDENTIFIER) ;
+idOrAccess          : (  access | IDENTIFIER) ;
 
 /* -- Assignments -- */
                     
-assignment          : IDENTIFIER  '=' expression_0
-                    | access      '=' expression_0 ;
+assignment          : IDENTIFIER  ('=' | OUTASSIGN) expression_0
+                    | access      ('=' | OUTASSIGN) expression_0 ;
 
-alwaysAssigned      : IDENTIFIER   ALWSASSIGN    expression_0
-                    | access       ALWSASSIGN    expression_0
-                    | IDENTIFIER   ALWSASSIGNDBL expression_0
-                    | access       ALWSASSIGNDBL expression_0
+alwaysAssigned      : IDENTIFIER   (ALWSASSIGN    | LDEFINE   ) expression_0
+                    | access        ALWSASSIGN                  expression_0
+                    | IDENTIFIER   (ALWSASSIGNDBL | LDEFINEDBL) expression_0
+                    | access        ALWSASSIGNDBL               expression_0
                     ;
 
 alwaysAssignedList  : alwaysAssigned ';' alwaysAssignedList | ;
@@ -296,45 +342,64 @@ asyncExec           : IDENTIFIER LARROW '(' callParamList ')' ;
 joinExec            : '(' callParamList ')' LARROW IDENTIFIER ;
 syncExec            : joinExec LARROW '(' callParamList ')' ;
 
-/* -- Circuitry instanciation -- */
+/* -- Circuitry instantiation -- */
 
-// TODO: allow passing ioAccess as well ( idOrIoAccess )
-identifierList      : IDENTIFIER ',' identifierList 
-                    | IDENTIFIER 
-                    | ;
+idOrIoAccessList    : idOrIoAccess ',' idOrIoAccessList
+                    | idOrIoAccess
+                    |
+                    ;
 
-circuitryInst       : '(' outs=identifierList ')' '=' IDENTIFIER '(' ins=identifierList ')';
+circuitryInst       : '(' outs=idOrIoAccessList ')' '=' IDENTIFIER '(' ins=idOrIoAccessList ')';
 
 /* -- Control flow -- */
 
 state               : state_name=IDENTIFIER ':' | NEXT ;
 jump                : GOTO IDENTIFIER ;
-call                : CALL IDENTIFIER ;
 returnFrom          : RETURN ;
 breakLoop           : BREAK ;
+assert_             : ASSERT '(' expression_0 ')';
+// NOTE: keep the `_` here else it clashes with various keywords etc
+assume              : ASSUME '(' expression_0 ')';
+restrict            : RESTRICT '(' expression_0 ')';
+was_at              : WASAT '(' IDENTIFIER (',' NUMBER)? ')';
+assertstable        : ASSERTSTABLE '(' expression_0 ')';
+assumestable        : ASSUMESTABLE '(' expression_0 ')';
+stableinput         : STABLEINPUT '(' idOrIoAccess ')';
+cover               : COVER '(' expression_0 ')';
 
 block               : '{' declarationList instructionList '}';
 ifThen              : 'if' '(' expression_0 ')' if_block=block ;
 ifThenElse          : 'if' '(' expression_0 ')' if_block=block 'else' else_block=block ;
-switchCase          : 'switch' '(' expression_0 ')' '{' caseBlock * '}' ;
+switchCase          : (SWITCH | ONEHOT) '(' expression_0 ')' '{' caseBlock * '}' ;
 caseBlock           : ('case' case_value=value ':' | DEFAULT ) case_block=block;
 whileLoop           : 'while' '(' expression_0 ')' while_block=block ;
 
 display             : (DISPLAY | DISPLWRITE) '(' STRING ( ',' callParamList )? ')';
+
+finish              : FINISH '(' ')';
 
 instruction         : assignment 
                     | syncExec
                     | asyncExec
                     | joinExec
                     | jump
-                    | call
                     | circuitryInst
                     | returnFrom
                     | breakLoop
                     | display
+                    | finish
+                    | assert_
+                    | assume
+                    | restrict
+                    | was_at
+                    | assumestable
+                    | assertstable
+                    | cover
                     ;
 
-alwaysBlock         : ALWAYS '{' instructionList '}';
+alwaysBlock         : ALWAYS       block;
+alwaysAfterBlock    : ALWAYS_AFTER block;
+
 repeatBlock         : REPEATCNT '{' instructionList '}' ;
 
 pipeline            : block ('->' block) +;
@@ -347,7 +412,8 @@ input               : 'input' nolatch='!'? type IDENTIFIER
                     | 'input' nolatch='!'? type IDENTIFIER '[' NUMBER ']';
 output              : 'output' combinational='!'? declarationVar
                     | 'output' combinational='!'? declarationTable ; 
-inOrOut             :  input | output | inout | ioDef;
+outputs             : 'input' OUTPUTS '(' alg=IDENTIFIER ')' grp=IDENTIFIER ;
+inOrOut             :  input | output | inout | ioDef | outputs ;
 inOutList           :  inOrOut (',' inOrOut)* ','? | ;
 
 /* -- Declarations, subroutines, instruction lists -- */
@@ -374,9 +440,10 @@ subroutineParam     : ( READ | WRITE | READWRITE | CALLS ) IDENTIFIER
 subroutineParamList : subroutineParam (',' subroutineParam)* ','? | ;
 subroutine          : SUB IDENTIFIER '(' subroutineParamList ')' '{' declList = declarationList  instructionList (RETURN ';')? '}' ;
                     
-declAndInstrList    : (declaration ';' | subroutine ) *
+declAndInstrList    : (declaration ';' | subroutine | stableinput ';' ) *
                       alwaysPre = alwaysAssignedList 
                       alwaysBlock?
+                      alwaysAfterBlock?
                       instructionList
 					  ;
 
@@ -392,10 +459,21 @@ circuitry           : 'circuitry' IDENTIFIER '(' ioList ')' block ;
 
 /* -- Algorithm -- */
 
-algorithm           : 'algorithm' IDENTIFIER '(' inOutList ')' algModifiers? '{' declAndInstrList '}' ;
+algorithm           : 'algorithm' HASH? IDENTIFIER '(' inOutList ')' bpModifiers? '{' declAndInstrList '}' ;
+
+/* -- RISC-V -- */
+
+cblock_chunks       : ( ~( '{' | '}' )) + ;
+cblock_items        : cblock | cblock_chunks;
+cblock              : '{' cblock_items * '}' ;
+
+riscvModifier       : IDENTIFIER '=' (STRING | NUMBER);
+riscvModifiers      : '<' riscvModifier (',' riscvModifier)* '>' ;
+
+riscv               : RISCV IDENTIFIER '(' inOutList ')' riscvModifiers? ('=' initList | cblock) ;
 
 /* -- Overall structure -- */
 
-topList       :  (algorithm | importv | appendv | subroutine | circuitry | group | bitfield | intrface) topList | ;
+topList       :  (algorithm | riscv | importv | appendv | subroutine | circuitry | group | bitfield | intrface) topList | ;
 
 root                : topList EOF ;

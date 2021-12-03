@@ -20,8 +20,8 @@ echo "build script: FRAMEWORK_FILE = $FRAMEWORK_FILE"
 export PATH=$PATH:$SILICE_DIR/../tools/fpga-binutils/mingw64/bin/:$SILICE_DIR:"/c/Program Files (x86)/Graphviz2.38/bin/"
 case "$(uname -s)" in
 MINGW*)
-export PYTHONHOME=/mingw64/bin
-export PYTHONPATH=/mingw64/lib/python3.8/
+# export PYTHONHOME=/mingw64/bin
+# export PYTHONPATH=/mingw64/lib/python3.8/
 export QT_QPA_PLATFORM_PLUGIN_PATH=/mingw64/share/qt5/plugins
 ;;
 *)
@@ -33,6 +33,6 @@ rm build.v
 
 silice --frameworks_dir $FRAMEWORKS_DIR -f $FRAMEWORK_FILE -o build.v $1 "${@:2}"
 
-yosys -p 'synth_ice40 ; show -width -stretch -colors 4242' build.v
+yosys -p 'synth ; show -width -stretch -colors 4242' build.v
 
 dot -Tpdf:cairo show.dot -O

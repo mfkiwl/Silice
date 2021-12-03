@@ -1,7 +1,7 @@
 #!/bin/bash
 
 case "$(uname -s)" in
-MINGW*|CYGWIN*) 
+MINGW*|CYGWIN*)
 SILICE_DIR=`cygpath $SILICE_DIR`
 BUILD_DIR=`cygpath $BUILD_DIR`
 FRAMEWORKS_DIR=`cygpath $FRAMEWORKS_DIR`
@@ -20,12 +20,17 @@ echo "build script: FRAMEWORK_FILE = $FRAMEWORK_FILE"
 export PATH=$PATH:$SILICE_DIR/../tools/fpga-binutils/mingw64/bin/:$SILICE_DIR
 case "$(uname -s)" in
 MINGW*)
-export PYTHONHOME=/mingw64/bin
-export PYTHONPATH=/mingw64/lib/python3.8/
+# export PYTHONHOME=/mingw64/bin
+# export PYTHONPATH=/mingw64/lib/python3.8/
 export QT_QPA_PLATFORM_PLUGIN_PATH=/mingw64/share/qt5/plugins
 ;;
 *)
 esac
+
+if [[ ! -z "${NO_BUILD}" ]]; then
+  echo "Skipping build."
+  exit
+fi
 
 cd $BUILD_DIR
 
@@ -33,8 +38,8 @@ rm build*
 
 silice --frameworks_dir $FRAMEWORKS_DIR -f $FRAMEWORK_FILE -o build.v $1 "${@:2}"
 
-yosys -q -p "synth_ice40 -json build.json" build.v
-nextpnr-ice40 --up5k --freq 13 --package sg48 --json build.json --pcf $BOARD_DIR/icebreaker.pcf --asc build.asc
+yosys -p "synth_ice40 -dsp -json build.json -abc9 -device u" build.v
+nextpnr-ice40 --up5k --freq 12 --package sg48 --json build.json --pcf $BOARD_DIR/icebreaker.pcf --asc build.asc
 
-icepack build.asc build.bin
+icepack -s build.asc build.bin
 iceprog build.bin

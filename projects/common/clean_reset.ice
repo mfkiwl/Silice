@@ -1,14 +1,18 @@
 // SL 2020-10-25
+// https://github.com/sylefeb/Silice
+// MIT license, see LICENSE_MIT in Silice repo root
 
-algorithm clean_reset(  
-  output uint1 out
+$$if not CLEAN_RESET_ICE then
+$$  CLEAN_RESET_ICE = 1
+
+algorithm clean_reset(
+  output uint1 out(1)
 ) <autorun> {
-  uint8 counter       = 1;
-  uint1 done         ::= (counter == 0);
-  uint8 counter_next ::= done ? 0 : counter + 1;
+  uint4  trigger = 15;
   always {
-    counter = counter_next;
-    out     = ~ done;
+    out     = trigger[0,1];
+    trigger = trigger >> 1;
   }
 }
 
+$$end

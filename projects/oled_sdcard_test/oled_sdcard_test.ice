@@ -1,13 +1,17 @@
 // SL 2020-07 @sylefeb
+// MIT license, see LICENSE_MIT in Silice repo root
+// https://github.com/sylefeb/Silice
 
 // vvvvvvvvvvvvv select screen driver below
 $$ -- SSD1351=1
 $$ ST7789=1
 //               vvvvv adjust to your screen
 $$ oled_width   = 240
-$$ oled_height  = 240
+$$ oled_height  = 320
 //               vvvvv set to false if the screen uses the CS pin
-$$ st7789_no_cs = true
+$$ st7789_no_cs = false
+
+// default configured for https://www.waveshare.com/wiki/2inch_LCD_Module
 
 $include('../common/oled.ice')
 
@@ -15,25 +19,25 @@ $$if not ULX3S and not ICARUS then
 $$error('only tested on ULX3S, small changes likely required to main input/outputs for other boards')
 $$end
 
-// ------------------------- 
+// -------------------------
 
 $include('../common/sdcard.ice')
 
-// ------------------------- 
+// -------------------------
 
 algorithm text_display(
   input   uint10 pix_x,
   input   uint10 pix_y,
   output  uint1  white,
-  simple_dualbram_port0 letter,
+  simple_dualport_bram_port0 letter,
 ) <autorun> {
 
-  // ---------- font  
+  // ---------- font
 $include('../common/font.ice')
 $$if letter_w ~= 8 or letter_h ~= 8 then
   error('expects a 8x8 font')
 $$end
-  
+
   // ---------- text display
 
   uint6  text_i   = 0;
@@ -43,7 +47,7 @@ $$end
   uint12 addr     = 0;
 
   // ---------- show time!
- 
+
   while (1) {
 
     // text
@@ -51,11 +55,11 @@ $$end
     text_i   = pix_x >> 3;
     letter_j = pix_y & 7;
     text_j   = pix_y >> 3;
-    
+
     if (text_i < 32 && text_j < 32) {
       letter.addr0 = text_i + (text_j*$oled_width>>3$);
-++:      
-      addr         = letter_i + ( letter_j << 3) 
+++:
+      addr         = letter_i + ( letter_j << 3)
                               + (letter.rdata0 << 6);
       white        = letters[ addr ];
     } else {
@@ -63,22 +67,22 @@ $$end
     }
 
   }
-  
+
 }
 
-// ------------------------- 
+// -------------------------
 
 algorithm main(
-  output! uint8 leds,
+  output  uint8 leds,
   input   uint7 btns,
-  output! uint1 oled_clk,
-  output! uint1 oled_mosi,
-  output! uint1 oled_dc,
-  output! uint1 oled_resn,
-  output! uint1 oled_csn,
-  output! uint1 sd_clk,
-  output! uint1 sd_mosi,
-  output! uint1 sd_csn,
+  output  uint1 oled_clk,
+  output  uint1 oled_mosi,
+  output  uint1 oled_dc,
+  output  uint1 oled_resn,
+  output  uint1 oled_csn,
+  output  uint1 sd_clk,
+  output  uint1 sd_mosi,
+  output  uint1 sd_csn,
   input   uint1 sd_miso
 ) {
 
@@ -113,7 +117,7 @@ algorithm main(
 
   uint11 str_x    = 0;
   uint10 str_y    = 0;
-  
+
   // ---------- string
   uint8  str[] = "SECTOR ";
 
@@ -189,9 +193,9 @@ algorithm main(
   io.next_pixel := 0;
   // writes to txt
   txt.wenable1  := 1;
-  
+
   leds           = 0;
-  
+
   // fill buffer with spaces
   {
     uint11 next = 0;
@@ -205,7 +209,7 @@ algorithm main(
 
   leds           = 1;
 
-  // wait for oled controller to be ready  
+  // wait for oled controller to be ready
   while (io.ready == 0) { }
 
   leds           = 2;
@@ -229,7 +233,7 @@ algorithm main(
   leds           = 8;
 
   while (1) {
-  
+
     // refresh (framebuffer style, even though the OLED
     // screen could support random access ...
     v = 0;
@@ -242,19 +246,20 @@ algorithm main(
         io.color      = white ? 18h3ffff : 0;
         io.next_pixel = 1;
         while (io.ready == 0) { }
-        
+
         u = u + 1;
       }
       v = v + 1;
     }
-    
+
     // wait for sdcard
-    // while (sdcio.ready == 0) { }
-    
+    while (sdcio.ready == 0) { }
+
     // write data on screen
     str_x = 0;
     str_y = 0;
     () <- print_string <- ();
+
     () <- print_hex    <- (sdcio.addr_sector[8,8]);
     () <- print_hex    <- (sdcio.addr_sector[0,8]);
     str_x = 0;
@@ -263,8 +268,8 @@ algorithm main(
     {
       uint8 l = 0;
       while (l < 20) {
-        v = 0;        
-        while (v < $15$) { 
+        v = 0;
+        while (v < $15$) {
           () <- print_hex <- (sdbuffer.rdata0);
           sdbuffer.addr0 = sdbuffer.addr0 + 1;
           v = v + 1;
@@ -278,7 +283,7 @@ algorithm main(
     if (btns_latch[1,1]) {
       sdcio.addr_sector = sdcio.addr_sector + 1;
     } else { if (btns_latch[2,1]) {
-        sdcio.addr_sector = (sdcio.addr_sector == 0) ? 0 : sdcio.addr_sector - 1;    
+        sdcio.addr_sector = (sdcio.addr_sector == 0) ? 0 : sdcio.addr_sector - 1;
       }
     }
     // read sector
@@ -288,4 +293,4 @@ algorithm main(
 
 }
 
-// ------------------------- 
+// -------------------------

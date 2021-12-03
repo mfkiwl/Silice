@@ -2,7 +2,10 @@
 //
 // A simple test for SDRAM controllers, in simulation
 //
-// ------------------------- 
+// -------------------------
+// MIT license, see LICENSE_MIT in Silice repo root
+// https://github.com/sylefeb/Silice
+// @sylefeb 2020
 
 $include('../common/sdram_interfaces.ice')
 $include('../common/sdram_controller_autoprecharge_r16_w16.ice')
@@ -14,7 +17,7 @@ append('../common/mt48lc16m16a2.v')
 import('../common/simul_sdram.v')
 $$end
 
-// ------------------------- 
+// -------------------------
 
 algorithm main(
   output uint$NUM_LEDS$ leds,
@@ -76,7 +79,7 @@ $$end
 
   // SDRAM interface
   sdram_r16w16_io sio;
-  
+
   // algorithm
   sdram_controller_autoprecharge_r16_w16 sdram(
     sd        <:> sio,
@@ -104,7 +107,7 @@ $$end
   // sdram clock for verilator simulation
   sdram_clock := clock;
   $$end
-  
+
   // maintain low (pulses when ready, see below)
   sio.in_valid := 0;
 
@@ -114,7 +117,7 @@ $$end
   sio.rw = 1;
   while (count < 65534) {
     // write to sdram
-    sio.data_in    = count;            
+    sio.data_in    = count;
     sio.addr       = count;
     sio.in_valid   = 1; // go ahead!
     while (!sio.done) { }
@@ -135,8 +138,8 @@ $$end
     read = sio.data_out;
     if (count < 16 || count > 65520) {
       __display("read  [%x] = %x",count,read);
-    }  
+    }
     count = count + 2;
-  }  
+  }
 
 }

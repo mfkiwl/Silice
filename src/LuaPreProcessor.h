@@ -1,17 +1,25 @@
 /*
 
     Silice FPGA language and compiler
-    (c) Sylvain Lefebvre - @sylefeb
+    Copyright 2019, (C) Sylvain Lefebvre and contributors
 
-This work and all associated files are under the
+    List contributors with: git shortlog -n -s -- <filename>
 
-     GNU AFFERO GENERAL PUBLIC LICENSE
-        Version 3, 19 November 2007
-        
-A copy of the license full text is included in 
-the distribution, please refer to it for details.
+    GPLv3 license, see LICENSE_GPLv3 in Silice repo root
 
-(header_1_0)
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your option)
+any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+(header_2_G)
 */
 #pragma once
 // -------------------------------------------------
@@ -23,40 +31,48 @@ the distribution, please refer to it for details.
 
 #include <LibSL/Math/Vertex.h>
 
-// -------------------------------------------------
+namespace Silice {
 
-/// \brief LUA based Pre-processor 
-class LuaPreProcessor
-{
-private:
+  // -------------------------------------------------
 
-  std::string processCode(std::string parent_path, std::string src_file, std::unordered_set<std::string> alreadyIncluded);
-  std::string findFile(std::string path, std::string fname) const;
+  /// \brief LUA based Pre-processor 
+  class LuaPreProcessor
+  {
+  private:
 
-  std::vector<std::string>           m_SearchPaths;  
-  std::map<std::string, std::string> m_Definitions;
+    std::string processCode(std::string parent_path, std::string src_file, std::unordered_set<std::string> alreadyIncluded);
+    std::string findFile(std::string path, std::string fname) const;
 
-  int                                m_CurOutputLine = 0;
-  std::vector<std::string>           m_Files;
-  std::vector<LibSL::Math::v3i>      m_FileLineRemapping; // [0] is line after, [1] is file id, [2] is line before
+    std::vector<std::string>           m_SearchPaths;
+    std::map<std::string, std::string> m_Definitions;
 
-public:
+    int                                m_CurOutputLine = 0;
+    std::vector<std::string>           m_Files;
+    std::vector<LibSL::Math::v3i>      m_FileLineRemapping; // [0] is line after, [1] is file id, [2] is line before
 
-  LuaPreProcessor();
-  virtual ~LuaPreProcessor();
+    std::string                        m_FilesReportName;   // if empty, no files report, otherwise name of the report
 
-  void run(std::string src_file, const std::vector<std::string>& defaultLibraries, std::string lua_header_code, std::string dst_file);
+  public:
 
-  std::vector<std::string> searchPaths() const { return m_SearchPaths; }
-  
-  void addDefinition(std::string def, std::string value) { m_Definitions[def] = value; }
+    LuaPreProcessor();
+    virtual ~LuaPreProcessor();
 
-  std::string findFile(std::string fname) const;
+    void run(std::string src_file, const std::vector<std::string> &defaultLibraries, std::string lua_header_code, std::string dst_file);
 
-  std::pair<std::string,int> lineAfterToFileAndLineBefore(int line_after) const;
+    std::vector<std::string> searchPaths() const { return m_SearchPaths; }
 
-  void addingLines(int num,int src_line, int src_file);
+    void addDefinition(std::string def, std::string value) { m_Definitions[def] = value; }
+
+    std::string findFile(std::string fname) const;
+
+    std::pair<std::string, int> lineAfterToFileAndLineBefore(int line_after) const;
+
+    void addingLines(int num, int src_line, int src_file);
+
+    void enableFilesReport(std::string fname);
+
+  };
+
+  // -------------------------------------------------
 
 };
-
-// -------------------------------------------------

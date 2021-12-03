@@ -1,4 +1,6 @@
 // @sylefeb, 2020-10-08, UART example
+// MIT license, see LICENSE_MIT in Silice repo root
+// https://github.com/sylefeb/Silice
 
 $include('../common/uart.ice')
 
@@ -9,6 +11,8 @@ algorithm main(
   output uint1 uart_tx,
   input  uint1 uart_rx
 ) {
+
+  uint1 send_asap = 0;
 
   uart_out uo;
   uart_sender usend(
@@ -23,14 +27,22 @@ algorithm main(
   );
 
   uo.data_in_ready := 0; // maintain low
+  leds             := 0;
 
-  leds = 0;
+  // NOTE: We only have to be carefull to wait for a previous
+  // transmission to be done before starting a new one.
+  // There is no real need for buffering since receive/transmit have
+  // the same overall speed.
 
   while (1) {
-    if (ui.data_out_ready) {
-      uo.data_in       = ui.data_out;
-      leds             = ui.data_out;
-      uo.data_in_ready = 1;
+    if (send_asap) {
+      // send echo
+      uo.data_in       = ui.data_out; // uart_sender copies the data on start
+      uo.data_in_ready = ~uo.busy;    // so we can change it at any time
+      send_asap        = uo.busy;
+    } else {
+      // wait for data
+      send_asap = ui.data_out_ready;
     }
   }
 
