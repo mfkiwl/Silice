@@ -1,0 +1,438 @@
+// SL 2023-04-17 @sylefeb
+// ========================================================
+//
+// This SOC runs entirely in PSRAM, enabling to use a
+//  'large' RAM for the CPU.
+//
+// This is using a special verision of the ice-v RV32I,
+// see CPUs/ice-v-ram.si
+//
+// The SOC is meant to fit in the IceStick and features:
+// - the QSPI RAM controler for a SPRAM module
+//   (see ../qpsram)
+// - a SPIscreen
+// - UART sending (e.g. for printf)
+//
+// ========================================================
+//
+// IMPORTANT: Assumes QSPI memory is already initialized.
+//            User xfer tool in ../qpsram
+//
+// ========================================================
+// https://github.com/sylefeb/Silice
+// MIT license, see LICENSE_MIT in Silice repo root
+// ========================================================
+
+// Address space and boot configuration
+// allow for 32MB RAM addressing + 1 bit periph
+$$addrW    = 24
+// bit for peripheral addresses
+$$periph   = addrW-1
+// boot address in QQSPI
+$$Boot     = 0
+$$print('===========> address bus width: ' .. addrW)
+
+// Main design frequency
+$$master_freq = 100
+$$qpsram_fast = true
+
+$$if ICESTICK then
+// Import hardware modules
+import('../common/plls/icestick_$master_freq$_lock.v')
+import('../common/ice40_half_clock.v')
+$$elseif SIMULATION then
+// ...
+$$else
+$$error('uho, this SOC is for simulation or IceStick only')
+$$end
+
+$$if SPISCREEN_EXTRA then
+$$  SPISCREEN=1
+$$end
+
+// Include the processor
+$$ICEV_FAST_SHIFT = nil
+$$ICEV_ALU_LATCH  = nil
+$$ICEV_MULDIV     = nil
+$$ICEV_USERDATA   = nil
+$include('../CPUs/ice-v-ram.si')
+
+// Include the QSPRAM controller
+$include('../common/qpsram2x.si')
+
+// Include the UART controller
+$$uart_bauds = 230400 -- 115200
+$$uart_in_clock_freq_mhz = master_freq//2
+$include('../common/uart.si')
+
+$include('clean_reset.si')
+
+// --------------------------------------------------
+// RAM
+// --------------------------------------------------
+
+// This group holds the signals for the 32-bits RAM ios
+group ram_io {
+  uint$addrW$ addr(0),     // addr to read from / write to
+  uint1       wenable(0),  // write enable
+  uint3       byte_size(0),   // byte size (1,2,4)
+  uint2       byte_offset(0), // byte offset
+  uint32      wdata(0),    // 4-bytes to write
+  uint32      rdata(0),    // 4-bytes read from memory
+  uint1       req_valid(0),// memory request ready (pulse)
+  uint1       done(0),     // memory request done (pulse)
+}
+
+// memory provider interface (user interface defined in processor source)
+interface ram_provider {
+  input     addr,
+  input     wenable,
+  input     byte_size,
+  input     byte_offset,
+  input     wdata,
+  output    rdata,
+  input     req_valid,
+  output    done
+}
+
+// --------------
+// QQSPI implementation of a ROM
+// Expected to run at twice the clock of host
+unit qqspi_memory(
+  ram_provider io,
+  inout   uint1 ram_io0,  inout  uint1 ram_io1,
+  inout   uint1 ram_io2,  inout  uint1 ram_io3,
+  output  uint1 ram_clk,  output uint1 ram_csn,
+  output  uint2 ram_bank,
+) {
+  $$if SIMULATION then
+  uint32 cycle(0);
+  uint32 cycle_req(0);
+  $$end
+  // QPSRAM RAM
+  qpsram_ram ram (
+    ram_csn  :> ram_csn,    ram_clk  :> ram_clk,
+    ram_io0 <:> ram_io0,    ram_io1 <:> ram_io1,
+    ram_io2 <:> ram_io2,    ram_io3 <:> ram_io3,
+  );
+  // logic
+  uint1            was_busy(0);
+  uint1            ram_was_busy(0);
+  uint1            fastram_was_busy(0);
+  uint4            work_vector(0);
+  uint2            count(0);
+  uint32           wdata(0);
+  uint2            done_2x(0);
+  uint1            io_req_was_high(0);
+  uint1            io_req_pulse(0);
+  uint32           rdata(0);
+  // fastram
+  bram uint8       fastram[2048] = uninitialized;
+
+  always {
+    ram.init                = 0;
+    // in periph?
+    uint1 in_periph         = io.addr[$addrW-3$,3] == 3b100;
+    // in fastram?
+    uint1 in_fastram        = &io.addr[$addrW-3$,3]; //_ == 3b111
+    // transform io.req_valid in a pulse (here running 2x clock)
+    io_req_pulse            = io.req_valid & ~io_req_was_high;
+    io_req_was_high         = io.req_valid;
+    // mask request on peripherals
+    uint1 req_valid         = io_req_pulse & ~in_periph;
+    uint1 req_valid_ram     = req_valid    & ~in_fastram;
+    uint1 req_valid_fastram = req_valid    &  in_fastram;
+    // data being read
+    io.rdata                = rdata;
+    rdata[{count,3b0},8] = (
+              (ram.data_next                  ? ram.rdata               : 8b0)
+            | (in_fastram                     ? fastram.rdata           : 8b0)
+            | ((~ram.data_next & ~in_fastram) ? io.rdata[{count,3b0},8] : 8b0)
+    );
+    // data being written
+    ram.wdata     = wdata[0,8];
+    // NOTE: ^^^^^^^^^^^^ wdata is not needed immediately by ram which is why it
+    //       is passed above to ram with latency wrt. assignment below vvvvvv
+    wdata         = (ram.data_next | (in_fastram & ~io_req_pulse) ) ? {8b0,wdata[8,24]}
+                  : req_valid                                       ? io.wdata
+                  : wdata;
+    fastram.wdata = wdata[0,8];
+    // address
+$$if SIMULATION then
+    ram.addr     = req_valid_ram ? {io.addr,io.byte_offset} : ram.addr;
+$$else
+    ram.addr     = req_valid_ram ? {io.addr[0,$addrW-3$],io.byte_offset} : ram.addr;
+    ram_bank     = io.addr[$addrW-3$,2];
+$$end
+    fastram.addr    = req_valid_fastram ? {io.addr[0,9],io.byte_offset} : (fastram.addr+1);
+    fastram.wenable = req_valid_fastram ? io.wenable : (fastram.wenable & (work_vector!=0));
+    ram.wenable     = req_valid_ram     ? io.wenable : ram.wenable;
+    // count bytes
+    count        = (req_valid                       ) ? 0
+                 : (ram.data_next | fastram_was_busy) ? (count+1) : count;
+    // one bit per byte to read/write
+    uint4 work_init = (io.byte_size[1,1] ? 3b001 : 3b000)
+                    | (io.byte_size[2,1] ? 3b100 : 3b000);
+    work_vector     = req_valid ?
+              ((ram.wenable|(in_fastram & ~io.wenable)) ? {work_init,in_fastram}
+//                 |                                                    ^
+/* ram writes need one more step */                     : work_init) // |
+/*                          one more cycle for reads -------------------|     */
+              : (ram.data_next | in_fastram) ? {1b0,work_vector[1,3]} // shift
+              : work_vector; // keep
+    // keep ram going?
+    ram.in_ready   = ((work_vector != 0) & ram.in_ready) | req_valid_ram;
+    // done?
+    done_2x        = ( (ram_was_busy     & ~ram.busy)
+                     | (io_req_pulse     & in_periph)
+                     | (fastram_was_busy & (work_vector==0))
+                     ) ? 2b11 : (done_2x >> 1);
+    io.done          = done_2x[0,1];
+    ram_was_busy     = ram.busy | req_valid_ram;
+    fastram_was_busy = (work_vector!=0) & (req_valid ? in_fastram : fastram_was_busy);
+$$if SIMULATION then
+/*
+    if (req_valid_fastram | req_valid_ram) {
+      cycle_req   = cycle;
+      if (in_fastram) {
+        if (io.wenable) {
+          __display("[%d][req ] **** [W] fastram:%b, wenable %b, offset %d, size %d, work_vector %b, ram.addr @%x, wdata: %x, bank:%b",cycle,in_fastram,io.wenable,io.byte_offset,io.byte_size,work_vector,ram.addr,io.wdata,ram_bank);
+        } else {
+          __display("[%d][req ] **** [R] fastram:%b, work_vector %b, offset %d, size %d, addr @%x, bank:%b ------------------------------------------",cycle,in_fastram,work_vector,io.byte_offset,io.byte_size,ram.addr,ram_bank);
+        }
+      }
+    }
+    if (ram.data_next) {
+      //__display("[%d][next] work_vector:%b count:%d ram.in_ready:%b ram.wenable:%b",cycle,work_vector,count,ram.in_ready,ram.wenable);
+    }
+    if (fastram_was_busy | fastram.wenable) {
+      __display("[%d][next] work_vector:%b count:%d io.byte_size:%d fastram.wenable:%b fastram.addr:%x fastram.rdata:%x fastram.wdata:%x io_req_pulse:%b",cycle,work_vector,count,io.byte_size,fastram.wenable,fastram.addr,fastram.rdata,fastram.wdata,io_req_pulse);
+    }
+    if (in_fastram && done_2x == 2b01) {
+      __display("[%d][req ] RAM req done in %d cycles (rdata:%x was_busy:%b io.req_valid:%b)",cycle,cycle-cycle_req+1,io.rdata,was_busy,io.req_valid);
+    }
+    // __display("[%d] rdata:%x count:%b done_2x:%b",cycle,io.rdata,count,done_2x);
+*/
+    cycle = cycle + 1;
+$$end
+
+  }
+}
+
+// --------------------------------------------------
+// PLL for simulation
+// --------------------------------------------------
+
+$$if SIMULATION then
+// PLL for simulation
+import('./common/passthrough.v')
+unit pll(
+  output  uint1 clock2x,
+  output  uint1 clock1x,
+  output  uint1 rst
+) {
+  uint2 counter(0);
+  uint1 rst_reg(0);
+  passthrough _(inv <: clock, outv :> clock2x);
+  always {
+    rst     = rst_reg;
+    rst_reg = reset;
+    clock1x = counter[0,1]; // x2 slower
+    counter = counter + 1;
+  }
+}
+$$end
+
+// --------------------------------------------------
+// SOC
+// --------------------------------------------------
+
+unit main( // I guess this is the SOC :-D
+  output uint5 leds,
+$$if PMOD_QQSPI then
+  inout   uint1 ram_io0,
+  inout   uint1 ram_io1,
+  inout   uint1 ram_io2,
+  inout   uint1 ram_io3,
+  output  uint1 ram_clk,
+  output  uint1 ram_csn,
+  output  uint2 ram_bank,
+$$end
+$$if UART then
+  output  uint1 uart_tx,
+  input   uint1 uart_rx,
+$$end
+$$if SPISCREEN then
+  output  uint1 spiscreen_clk,
+  output  uint1 spiscreen_mosi,
+  output  uint1 spiscreen_dc,
+  output  uint1 spiscreen_resn,
+  output  uint1 spiscreen_csn(0),
+$$if VERILATOR then
+  output uint2  spiscreen_driver(2/*ST7789*/),
+  output uint10 spiscreen_width (320),
+  output uint10 spiscreen_height(240),
+$$end
+$$end
+)
+$$if ICESTICK then
+<@clock1x,!rst1x> {
+  // ---- clocking (pll)
+  uint1 clock2x = uninitialized;
+  uint1 rst1x   = uninitialized;
+  pll pllgen(
+    clock_in  <: clock,
+    clock_out :> clock2x,
+    rst       :> rst1x
+  );
+  uint1 clock1x  = uninitialized;
+  ice40_half_clock hc(
+    clock_in  <: clock2x,
+    clock_out :> clock1x,
+  );
+$$elseif SIMULATION then
+<@clock1x,!rst1x> {
+  uint1 clock1x = uninitialized;
+  uint1 clock2x = uninitialized;
+  uint1 rst1x   = uninitialized;
+  pll clkgen<@clock>(
+    clock1x :> clock1x,
+    clock2x :> clock2x,
+    rst     :> rst1x
+  );
+  uint32 cycle(0);
+  // dummy pins for simulation
+  uint1 ram_io0(0);  uint1 ram_io1(0);  uint1 ram_io2(0);
+  uint1 ram_io3(0);  uint1 ram_clk(0);  uint1 ram_csn(0);
+  uint2 ram_bank(0);
+$$else
+{
+$$end
+
+  // ---- display SPI controller
+$$if SPISCREEN then
+  uint1 screen_dc(0);   uint1 screen_clk(0);
+  uint1 screen_mosi(0); uint1 screen_resn(0);
+  uint1 displ_dta_or_cmd <: ~ramio.wdata[9,1]; // data or command
+  uint8 displ_byte       <:  ramio.wdata[0,8]; // byte to be written
+  spi_mode3_send display(
+    data_or_command <: displ_dta_or_cmd,
+    byte            <: displ_byte,
+    spi_mosi        :> screen_mosi,
+    spi_clk         :> screen_clk,
+    spi_dc          :> screen_dc,
+  );
+$$if not SIMULATION then
+   sb_io _( clock <: clock1x, out  <: screen_clk,  pin  :> spiscreen_clk);
+   sb_io _( clock <: clock1x, out  <: screen_mosi, pin  :> spiscreen_mosi);
+   sb_io _( clock <: clock1x, out  <: screen_dc,   pin  :> spiscreen_dc);
+   sb_io _( clock <: clock1x, out  <: screen_resn, pin  :> spiscreen_resn);
+$$end
+$$end
+
+  // ---- memory (RAM)
+  ram_io ramio_2x;
+  qqspi_memory ram<@clock2x>(
+    io      <:> ramio_2x,
+    ram_csn  :> ram_csn,    ram_clk  :> ram_clk,
+    ram_io0 <:> ram_io0,    ram_io1 <:> ram_io1,
+    ram_io2 <:> ram_io2,    ram_io3 <:> ram_io3,
+    ram_bank :> ram_bank
+  );
+
+  // ---- cpu
+  ram_io ramio;
+  icev_ram cpu(
+    mem <:> ramio,
+  );
+
+  // ---- uart
+  uart_out    uo;
+$$if UART then
+  uart_sender usend(
+    io      <:> uo,
+    uart_tx :>  uart_tx
+  );
+$$end
+
+  // ---- registers for crossing clock domain between ram and cpu
+  uint32 reg_rdata(0);  uint1 reg_done(0);
+
+  // ---- always block (main logic)
+  always {
+
+    // ---- ram io clock domain crossing
+    ramio_2x.addr        = ramio.addr;        ramio_2x.wenable   = ramio.wenable;
+    ramio_2x.byte_offset = ramio.byte_offset; ramio_2x.byte_size = ramio.byte_size;
+    ramio_2x.wdata       = ramio.wdata;       ramio_2x.req_valid = ramio.req_valid;
+    ramio.rdata          = reg_rdata;         ramio.done         = reg_done;
+    reg_rdata            = ramio_2x.rdata;    reg_done           = ramio_2x.done;
+
+    // ---- peripherals
+    // uart
+    uo.data_in_ready = 0;  // maintain low
+    uo.data_in       = ramio.wdata[0,8];
+$$if SPISCREEN then
+    // display
+    display.enable   = 0;  // maintain low
+$$if SIMULATION then
+    spiscreen_clk  = screen_clk; spiscreen_mosi = screen_mosi; // assign pins
+    spiscreen_dc   = screen_dc;  spiscreen_resn = screen_resn;
+$$end
+$$end
+
+    leds = {ramio.byte_size,ramio.done,ramio.wenable,ramio.req_valid};
+
+    // ---- memory mapping to peripherals: writes
+    // (vvvvvv NOTE: could register vvvvvv)
+		if (ramio.req_valid & ramio.wenable & ramio.addr[$addrW-3$,3] == 3b100) {
+      uint3 select = ramio.addr[0,3];
+      onehot(select) {
+        case 0: {
+          // leds for activity
+          // leds = ramio.wdata[0,5];
+$$if SIMULATION then
+          // __display("[%d] %x|%d",cycle,ramio.wdata,ramio.wdata);
+          __write("%c",ramio.wdata[0,8]);
+$$end
+          // send over uart
+          uo.data_in_ready = 1;
+        }
+        case 1: {
+$$if SPISCREEN then
+          // command
+          display.enable = 1;
+$$if SIMULATION then
+          //__display("[cycle %d] SPISCREEN: %b %x (cmd:%b)", cycle, ramio.wdata[0,8], ramio.wdata[0,8], ramio.wdata[9,1]);
+$$end
+$$end
+        }
+        case 2: {
+$$if SPISCREEN then
+          // reset
+          screen_resn = ~ ramio.wdata[0,1];
+$$if SIMULATION then
+          //__display("[cycle %d] SPISCREEN resn: %b", cycle, ~ramio.wdata[0,1]);
+$$end
+$$end
+        }
+        default: { }
+      }
+    }
+
+$$if SIMULATION then
+    cycle       = cycle + 1;
+    // if (cycle == 10000) { __finish(); } // stops sim after n cycles
+$$end
+  }
+
+}
+
+// --------------------------------------------------
+
+$$if SPISCREEN then
+// include SPI driver for screen
+$include('../common/spi.si')
+$$end
+
+// --------------------------------------------------

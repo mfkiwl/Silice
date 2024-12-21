@@ -1,22 +1,22 @@
 /*
 
     Silice FPGA language and compiler
-    Copyright 2019, (C) Sylvain Lefebvre and contributors 
+    Copyright 2019, (C) Sylvain Lefebvre and contributors
 
     List contributors with: git shortlog -n -s -- <filename>
 
     GPLv3 license, see LICENSE_GPLv3 in Silice repo root
 
-This program is free software: you can redistribute it and/or modify it 
-under the terms of the GNU General Public License as published by the 
-Free Software Foundation, either version 3 of the License, or (at your option) 
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your option)
 any later version.
 
-This program is distributed in the hope that it will be useful, but WITHOUT 
-ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License along with 
+You should have received a copy of the GNU General Public License along with
 this program.  If not, see <https://www.gnu.org/licenses/>.
 
 (header_2_G)
@@ -35,7 +35,11 @@ See GitHub Issues section for open/known issues.
 
 #include "TypesAndConsts.h"
 #include "Blueprint.h"
+#include "ParsingContext.h"
 
+#include "Utils.h"
+
+#include <list>
 #include <string>
 #include <iostream>
 #include <fstream>
@@ -60,7 +64,6 @@ See GitHub Issues section for open/known issues.
 #define ALG_INPUT   "in"
 #define ALG_OUTPUT  "out"
 #define ALG_INOUT   "inout"
-#define ALG_IDX     "index"
 #define ALG_RUN     "run"
 #define ALG_AUTORUN "autorun"
 #define ALG_CALLER  "caller"
@@ -77,6 +80,7 @@ namespace Silice
 
   class LuaPreProcessor;
   class Module;
+  class SiliceCompiler;
 
   // -------------------------------------------------
 
@@ -87,6 +91,16 @@ namespace Silice
 
     /// \brief memory types
     enum e_MemType { UNDEF, BRAM, SIMPLEDUALBRAM, DUALBRAM, BROM };
+
+    /// \brief declaration types (used to check for permission during syntax parsing, combined as bitfield)
+    enum e_DeclType {
+      dWIRE = 1, dVAR = 2, dTABLE = 4, dMEMORY = 8,
+      dGROUP = 16, dINSTANCE = 32, dVARNOEXPR = 64,
+      dSUBROUTINE = 128, dSTABLEINPUT = 256
+    };
+
+    /// \brief identifier availability
+    enum e_IdentifierAvailability { e_Available=0, e_Shadowing=1, e_Collision=2};
 
     /// \brief algorithm name
     std::string m_Name;
@@ -103,9 +117,6 @@ namespace Silice
     /// \brief whether algorithm autorun at startup
     bool m_AutoRun = false;
 
-    /// \brief whether algorithm uses onehot state encoding
-    bool m_OneHot = false;
-
     /// \brief specified depth to use for the formal verification
     std::string m_FormalDepth = "";
 
@@ -115,22 +126,20 @@ namespace Silice
     /// \brief all the modes the algorithm is supposed to be verified in
     std::vector<std::string> m_FormalModes{};
 
-    /// \brief Set of known blueprints
-    const std::unordered_map<std::string, AutoPtr<Blueprint> >& m_KnownBlueprints;
     /// \brief Set of known subroutines
     const std::unordered_map<std::string, siliceParser::SubroutineContext*>& m_KnownSubroutines;
     /// \brief Set of known circuitries
-    const std::unordered_map<std::string, siliceParser::CircuitryContext*>& m_KnownCircuitries;
+    const std::unordered_map<std::string, siliceParser::CircuitryContext*>&  m_KnownCircuitries;
     /// \brief Set of known groups
-    const std::unordered_map<std::string, siliceParser::GroupContext*>& m_KnownGroups;
+    const std::unordered_map<std::string, siliceParser::GroupContext*>&      m_KnownGroups;
     /// \brief Set of known interfaces
-    const std::unordered_map<std::string, siliceParser::IntrfaceContext*> &m_KnownInterfaces;
+    const std::unordered_map<std::string, siliceParser::IntrfaceContext*>&   m_KnownInterfaces;
     /// \brief Set of known bitfields
-    const std::unordered_map<std::string, siliceParser::BitfieldContext*>& m_KnownBitFields;
+    const std::unordered_map<std::string, siliceParser::BitfieldContext*>&   m_KnownBitFields;
 
 public:
 
-    /// \brief enum for flip-flop usage
+    /// \brief enum for flip-flop usage (combined as bitfield)
     enum e_FFUsage {
       e_None = 0, e_D = 1, e_Q = 2, e_DQ = 3,
       e_Latch = 4, e_LatchD = 5, e_LatchQ = 6, e_LatchDQ = 7,
@@ -147,13 +156,12 @@ private:
       t_type_nfo  type_nfo;
       int         table_size        = 0;
       bool        do_not_initialize = false;
-      bool        no_input_latch    = false;
       bool        delayed           = false;
       std::string custom_template;
-      int         line              = -1;
+      Utils::t_source_loc      srcloc;
       std::vector<std::string> clocks;
-      std::vector<std::string> in_vars;
-      std::vector<std::string> out_vars;
+      std::vector<std::pair<std::string, std::string> > in_vars;  // member name, vio name
+      std::vector<std::pair<std::string, std::string> > out_vars; // member name, vio name
       std::vector<std::string> init_values;
       std::vector<std::string> members;
     };
@@ -191,17 +199,27 @@ private:
     /// \brief all inout names, map contains index in m_InOuts
     std::unordered_map<std::string, int > m_InOutNames;
 
-    /// \brief VIO (variable-or-input-or-output) bound to module/algorithms outputs (wires) (vio name => wire name)
-    std::unordered_map<std::string, std::string>  m_VIOBoundToBlueprintOutputs;
+    /// \brief binding point, identifier or access
+    typedef std::variant<std::string, siliceParser::AccessContext*> t_binding_point;
+
+    /// \brief VIO bound to blueprint outputs (wires) (vio name => wire name)
+    std::unordered_map<std::string, std::string>      m_VIOBoundToBlueprintOutputs;
     /// \brief module/algorithms inouts bound to VIO (inout => vio name)
-    std::unordered_map<std::string, std::string > m_BlueprintInOutsBoundToVIO;
+    std::unordered_map<std::string, t_binding_point > m_BlueprintInOutsBoundToVIO;
     /// \brief VIO bound to module/algorithms inouts (vio name => inout)
-    std::unordered_map<std::string, std::string > m_VIOToBlueprintInOutsBound;
+    std::unordered_map<std::string, std::string >     m_VIOToBlueprintInOutsBound;
+
+    // forward definition of combinational blocks
+    class t_combinational_block;
 
     /// \brief all variables
     std::vector< t_var_nfo >              m_Vars;
     /// \brief all var names, map contains index in m_Vars
     std::unordered_map<std::string, int > m_VarNames;
+    /// \brief expression catchers are variables that get assigned when an
+    ///        expression is reached; these are used for temporaries and initializers
+    ///        NOTE: there can be only one catcher for a same expression
+    std::map<std::pair<siliceParser::Expression_0Context *,const t_combinational_block *>, std::string > m_ExpressionCatchers;
 
     /// \brief all memories
     std::vector< t_mem_nfo >              m_Memories;
@@ -211,30 +229,57 @@ private:
     /// \brief enum binding direction
     enum e_BindingDir { e_Left, e_LeftQ, e_Right, e_BiDir, e_Auto, e_AutoQ };
 
-    /// \brief binding point, identifier or access
-    typedef std::variant<std::string, siliceParser::AccessContext*> t_binding_point;
-
     /// \brief records info about variable bindings
     typedef struct
     {
       std::string     left;
       t_binding_point right;
       e_BindingDir    dir;
-      int             line;      // for error reporting
+      Utils::t_source_loc srcloc;
     } t_binding_nfo;
 
-    /// \brief info about an instanced algorithm
+    /// \brief information about a forward jump
     typedef struct {
-      std::string                blueprint_name;
-      std::string                instance_name;
-      std::string                instance_prefix;
-      int                        instance_line; // error reporting
-      AutoPtr<Blueprint>         blueprint;
-      std::vector<t_binding_nfo> bindings;
-      bool                       autobind;
-      std::string                instance_clock;
-      std::string                instance_reset;
-      bool                       instance_reginput = false;
+      t_combinational_block     *from;
+      antlr4::ParserRuleContext *jump;
+    } t_forward_jump;
+
+    /// \brief stores info about an FSM
+    typedef struct s_fsm_nfo {
+      /// \brief fsm name
+      std::string                                               name;
+      /// \brief first block of the fsm
+      t_combinational_block                                    *firstBlock  = nullptr;
+      /// \brief last block of the fsm
+      t_combinational_block                                    *lastBlock = nullptr;
+      /// \brief parent block, in parent fsm (if any)
+      t_combinational_block                                    *parentBlock = nullptr;
+      /// \brief state name to combinational block
+      std::unordered_map< std::string, t_combinational_block* > state2Block;
+      /// \brief id to combination block
+      std::unordered_map< size_t, t_combinational_block* >      id2Block;
+      /// \brief stores encountered forwards refs for later resolution
+      std::unordered_map< std::string, std::vector< t_forward_jump > > jumpForwardRefs;
+      /// \brief maximum state value of the algorithm
+      int                                                       maxState = -1;
+      /// \brief indicates whether the fsm uses one hot encoding
+      bool                                                      oneHot = false;
+    } t_fsm_nfo;
+
+    /// \brief info about an instanced algorithm
+    typedef struct s_instanced_nfo  {
+      std::string                   blueprint_name;
+      std::string                   instance_name;
+      std::string                   instance_prefix;
+      Utils::t_source_loc           srcloc;
+      std::vector<t_binding_nfo>    bindings;
+      bool                          autobind;
+      std::string                   instance_clock;
+      std::string                   instance_reset;
+      bool                          instance_reginput = false;
+      AutoPtr<Blueprint>            blueprint;
+      t_parsed_unit                 parsed_unit;
+      t_instantiation_context       specializations;
       std::unordered_map<std::string, std::pair<t_binding_point, e_FFUsage> > boundinputs;
     } t_instanced_nfo;
 
@@ -242,12 +287,15 @@ private:
     std::unordered_map< std::string, t_instanced_nfo > m_InstancedBlueprints;
     std::vector< std::string >                         m_InstancedBlueprintsInDeclOrder;
 
+    /// \brief instanced circuitries
+    std::vector< t_parsed_circuitry > m_InstancedCircuitries;
+
     /// \brief info about a call parameter
-    /// 
+    ///
     /// a group identifier
     /// expression is always the source expression (even if a group)
-    typedef struct {
-      antlr4::tree::ParseTree  *expression = nullptr;
+    typedef struct s_call_param  {
+      siliceParser::Expression_0Context *expression = nullptr;
       std::variant<
         std::monostate,                     // empty
         std::string,                        // identifier
@@ -255,9 +303,6 @@ private:
         siliceParser::AccessContext*        // access
         > what;
     } t_call_param;
-
-    // forward definition
-    class t_combinational_block;
 
     /// \brief stores info for single instructions
     class t_instr_nfo {
@@ -272,10 +317,12 @@ private:
     class t_subroutine_nfo {
     public:
       std::string                                     name;
-      t_combinational_block                          *top_block;
+      t_combinational_block                          *top_block = nullptr;
+      bool                                            body_parsed = false; // indicates whether the body was parsed
       std::unordered_set<std::string>                 allowed_reads;
       std::unordered_set<std::string>                 allowed_writes;
-      std::unordered_map<std::string, std::string>    vios;     // [subroutine space => translated var name in host]
+      std::unordered_set<std::string>                 allowed_calls;
+      std::unordered_map<std::string, std::string>    io2var;   // [subroutine space => translated var name in host]
       std::vector<std::string>                        inputs;   // ordered list of input names (subroutine space)
       std::vector<std::string>                        outputs;  // ordered list of output names (subroutine space)
       std::vector<std::string>                        vars;     // ordered list of internal var names (subroutine space)
@@ -294,22 +341,44 @@ private:
 
     /// \brief info about a pipeline
     /// trickling protects globally written vios for later
-    /// pipeline stages, so that the pipeline behaves as if 
+    /// pipeline stages, so that the pipeline behaves as if
     /// a standard loop.
     typedef struct {
       std::string                               name;
       std::unordered_map<std::string, v2i>      trickling_vios; // v2i: [0] stage at which to start [1] stage at which to stop
       std::vector<struct s_pipeline_stage_nfo*> stages;
+      struct s_pipeline_stage_nfo              *nested_in_parent_stage;
+      // track read/written vios
+      std::unordered_map<std::string, std::vector<int> > read_at, written_at;
+      std::unordered_set<std::string> written_outputs;
+      std::unordered_set<std::string> written_special;
     } t_pipeline_nfo;
 
     /// \brief info about a pipeline stage
     typedef struct s_pipeline_stage_nfo {
       t_pipeline_nfo *pipeline;
+      t_fsm_nfo      *fsm;
       int             stage_id;
+      siliceParser::InstructionListContext         *node;
+      std::unordered_set<std::string>               read;
+      std::unordered_set<std::string>               written_backward;
+      std::unordered_set<std::string>               written_forward;
+      std::unordered_map< std::string, std::string> vio_prev_name;
     } t_pipeline_stage_nfo;
+
+    /// \brief vector of all pipeline FSMs
+    std::vector< t_fsm_nfo* >      m_PipelineFSMs;
 
     /// \brief vector of all pipelines
     std::vector< t_pipeline_nfo* > m_Pipelines;
+    /// \brief mapping between vio names and pipeline stages
+    std::unordered_map< std::string, t_pipeline_stage_nfo* > m_Vio2PipelineStage;
+
+    /// \brief struct describing the first and last block of a pipeline stage
+    typedef struct {
+      const Algorithm::t_combinational_block *first;
+      const Algorithm::t_combinational_block *last;
+    } t_pipeline_stage_range;
 
     /// \brief variable dependencies within combinational sequences
     class t_vio_dependencies {
@@ -351,8 +420,18 @@ private:
       t_combinational_block        *if_next;
       t_combinational_block        *else_next;
       t_combinational_block        *after;
-      end_action_if_else(t_instr_nfo test_, t_combinational_block *if_next_, t_combinational_block *else_next_, t_combinational_block *after_)
-        : test(test_), if_next(if_next_), else_next(else_next_), after(after_) {}
+      bool                          if_stateless;      // if side is stateless
+      t_combinational_block        *if_trail;          // block ending the if branch
+      bool                          else_stateless;    // else side is stateless
+      t_combinational_block        *else_trail;        // block ending the else branch
+      end_action_if_else(t_instr_nfo test_, 
+                         t_combinational_block *if_next_, bool if_stateless_, t_combinational_block* if_trail_,
+                         t_combinational_block *else_next_, bool else_stateless_, t_combinational_block* else_trail_,
+                         t_combinational_block *after_)
+        : test(test_), 
+          if_next(if_next_), if_stateless(if_stateless_), if_trail(if_trail_),
+          else_next(else_next_), else_stateless(else_stateless_), else_trail(else_trail_),
+          after(after_) {}
       void getChildren(std::vector<t_combinational_block*>& _ch) const override { _ch.push_back(if_next); _ch.push_back(else_next); _ch.push_back(after); }
       std::string name() const override { return "end_action_if_else";}
     };
@@ -388,11 +467,11 @@ private:
     class end_action_wait : public t_end_action
     {
     public:
-      int                           line;
+      Utils::t_source_loc           srcloc;
       std::string                   algo_instance_name;
       t_combinational_block        *waiting;
       t_combinational_block        *next;
-      end_action_wait(int line_, std::string algo_name_, t_combinational_block *waiting_, t_combinational_block *next_) : line(line_), algo_instance_name(algo_name_), waiting(waiting_), next(next_) {}
+      end_action_wait(Utils::t_source_loc srcloc_, std::string algo_name_, t_combinational_block *waiting_, t_combinational_block *next_) : srcloc(srcloc_), algo_instance_name(algo_name_), waiting(waiting_), next(next_) {}
       void getChildren(std::vector<t_combinational_block*>& _ch) const override { _ch.push_back(waiting); _ch.push_back(next); }
       std::string name() const override { return "end_action_wait";}
     };
@@ -401,17 +480,17 @@ private:
     class end_action_return_from : public t_end_action
     {
     private:
-    std::string                            subroutine;    
+    std::string                            subroutine;
     const t_SubroutinesCallerReturnStates& return_states;
     public:
       end_action_return_from(std::string subroutine_,const t_SubroutinesCallerReturnStates& return_states_) : subroutine(subroutine_), return_states(return_states_) { }
-      void getChildren(std::vector<t_combinational_block*>& _ch) const override {  
+      void getChildren(std::vector<t_combinational_block*>& _ch) const override {
         auto RS = return_states.find(subroutine);
         if (RS != return_states.end()) {
           for (auto caller_return : RS->second) {
             _ch.push_back(caller_return.second);
           }
-        }        
+        }
       }
       std::string name() const override { return "end_action_return_from";}
     };
@@ -432,9 +511,8 @@ private:
     {
     public:
       t_combinational_block        *next;
-      t_combinational_block        *after;
-      end_action_pipeline_next(t_combinational_block *next_, t_combinational_block *after_) : next(next_), after(after_) { }
-      void getChildren(std::vector<t_combinational_block*>& _ch) const override { _ch.push_back(next); _ch.push_back(after); }
+      end_action_pipeline_next(t_combinational_block *next_) : next(next_) { }
+      void getChildren(std::vector<t_combinational_block*>& _ch) const override { _ch.push_back(next); }
       std::string name() const override { return "end_action_pipeline_next";}
     };
 
@@ -445,11 +523,15 @@ private:
     /// \brief subroutine calls: which states subroutine are going back to
     t_SubroutinesCallerReturnStates                                 m_SubroutinesCallerReturnStates;
 
+    /// \brief records information about source lines being used
+    typedef std::map<std::string, std::set<v2i>> t_lines_nfo;
+
     /// \brief combinational block context
-    typedef struct {
-      t_subroutine_nfo            *subroutine   = nullptr; // if block belongs to a subroutine
-      t_pipeline_stage_nfo        *pipeline     = nullptr; // if block belongs to a pipeline
-      const t_combinational_block *parent_scope = nullptr; // parent block in scope
+    typedef struct s_combinational_block_context {
+      t_fsm_nfo                   *fsm            = nullptr; // FSM the block belongs to (never null, top blocks belong to m_RootFSM)
+      t_subroutine_nfo            *subroutine     = nullptr; // if block belongs to a subroutine
+      t_pipeline_stage_nfo        *pipeline_stage = nullptr; // if block belongs to a pipeline
+      t_combinational_block       *parent_scope   = nullptr; // parent block in scope
       std::unordered_map<std::string, std::string> vio_rewrites; // if the block contains vio rewrites
     } t_combinational_block_context;
 
@@ -459,26 +541,26 @@ private:
     private:
       void swap_end(t_end_action *end) { if (end_action != nullptr) delete (end_action); end_action = end; }
     public:
-      size_t                              id;                   // internal block id
-      std::string                         block_name;           // internal block name (state name from source when applicable)
-      antlr4::misc::Interval              source_interval = antlr4::misc::Interval::INVALID; // block source interval
-      bool                                is_state = false;     // true if block has to be a state, false otherwise
-      bool                                is_sub_state = false; // true if block is a sub state in a linear seauence
-      bool                                could_be_sub = false; // whether could be made a sub-state
-      bool                                no_skip = false;      // true the state cannot be skipped, even if empty
-      int                                 state_id = -1;        // state id, when assigned, -1 otherwise
-      int                                 parent_state_id = -1; // state id of the parent, -1 only if never reached
-      int                                 num_sub_states = 0;   // number of sub-states below if root of a sequence
-      int                                 sub_state_id = 0;     // sub-state id if is_sub_state
-      std::vector<t_instr_nfo>            instructions;         // list of instructions within block
-      t_end_action                       *end_action = nullptr; // end action to perform
-      t_combinational_block_context       context;              // block context: subroutine, parent, etc.
-      std::unordered_set<std::string>     declared_vios;        // vios declared by block
+      size_t                               id;                   // internal block id
+      std::string                          block_name;           // internal block name (state name from source when applicable)
+      Utils::t_source_loc                  srcloc;               // localization in source code
+      bool                                 is_state = false;     // true if block has to be a state, false otherwise
+      bool                                 no_skip  = false;     // true the state cannot be skipped, even if empty
+      int                                  state_id = -1;        // state id, when assigned, -1 otherwise
+      int                                  parent_state_id = -1; // parent state id (closest state before)
+      std::vector<t_instr_nfo>             decltrackers;         // list of declaration expressions within block (typically bound exprs, aka wires)
+      std::vector<t_instr_nfo>             instructions;         // list of instructions within block
+      t_end_action                        *end_action = nullptr; // end action to perform
+      t_combinational_block_context        context;              // block context: subroutine, parent, etc.
+      std::unordered_set<std::string>      declared_vios;        // vios declared by block
       std::unordered_map<std::string, int> initialized_vars;     // variables to initialize at block start
-      std::unordered_set<std::string>     in_vars_read;         // which variables are read from before
-      std::unordered_set<std::string>     out_vars_written;     // which variables have been written after
+      std::unordered_set<std::string>      in_vars_read;         // which variables are read from before
+      std::unordered_set<std::string>      out_vars_written;     // which variables have been written after
+      t_lines_nfo                          lines;                // additional lines used by the block for fsm report
+
       ~t_combinational_block() { swap_end(nullptr); }
 
+      bool        has_end_action()  const { return end_action != nullptr; }
       std::string end_action_name() { if (end_action != nullptr) return end_action->name(); else return "<none>"; }
 
       void next(t_combinational_block *next)
@@ -488,9 +570,12 @@ private:
       }
       const end_action_goto_next *next() const { return dynamic_cast<const end_action_goto_next*>(end_action); }
 
-      void if_then_else(t_instr_nfo test, t_combinational_block *if_next, t_combinational_block *else_next, t_combinational_block *after)
+      void if_then_else(t_instr_nfo test, 
+                        t_combinational_block *if_next, bool if_nocombex, t_combinational_block *if_trail,
+                        t_combinational_block *else_next, bool else_nocombex, t_combinational_block* else_trail,
+                        t_combinational_block *after)
       {
-        swap_end(new end_action_if_else(test, if_next, else_next, after));
+        swap_end(new end_action_if_else(test, if_next, if_nocombex, if_trail, else_next, else_nocombex, else_trail, after));
       }
       const end_action_if_else *if_then_else() const { return dynamic_cast<const end_action_if_else*>(end_action); }
 
@@ -500,9 +585,9 @@ private:
       }
       const end_action_switch_case* switch_case() const { return dynamic_cast<const end_action_switch_case*>(end_action); }
 
-      void wait(int line, std::string algo_name, t_combinational_block *waiting, t_combinational_block *next)
+      void wait(Utils::t_source_loc srcloc, std::string algo_name, t_combinational_block *waiting, t_combinational_block *next)
       {
-        swap_end(new end_action_wait(line, algo_name, waiting, next));
+        swap_end(new end_action_wait(srcloc, algo_name, waiting, next));
       }
       const end_action_wait *wait() const { return dynamic_cast<const end_action_wait*>(end_action); }
 
@@ -524,9 +609,9 @@ private:
       }
       const end_action_goto_and_return_to * goto_and_return_to() const { return dynamic_cast<const end_action_goto_and_return_to*>(end_action); }
 
-      void pipeline_next(t_combinational_block *next, t_combinational_block *after)
+      void pipeline_next(t_combinational_block *next)
       {
-        swap_end(new end_action_pipeline_next(next, after));
+        swap_end(new end_action_pipeline_next(next));
       }
       const end_action_pipeline_next *pipeline_next() const { return dynamic_cast<const end_action_pipeline_next*>(end_action); }
 
@@ -534,17 +619,15 @@ private:
     };
 
     /// \brief context while gathering code
-    typedef struct
+    typedef struct s_gather_context
     {
-      int                    __id;
-      t_combinational_block *break_to;
+      bool                                      in_algorithm = false;
+      bool                                      in_algorithm_preamble = false;
+      bool                                      in_algorithm_top      = false;
+      int                                       __id = -1;
+      t_combinational_block                    *break_to = nullptr;
+      const Blueprint::t_instantiation_context *ictx = nullptr;
     } t_gather_context;
-
-    /// \brief information about a forward jump
-    typedef struct {
-      t_combinational_block     *from;
-      antlr4::ParserRuleContext *jump;
-    } t_forward_jump;
 
     /// \brief information about a past check ('#was_at(lbl, cycle_count)')
     typedef struct {
@@ -573,23 +656,20 @@ private:
     /// \brief always blocks
     t_combinational_block                                             m_AlwaysPre;
     t_combinational_block                                             m_AlwaysPost;
+    /// \brief root FSM
+    t_fsm_nfo                                                         m_RootFSM;
     /// \brief wire assignments
     std::unordered_map<std::string, int>                              m_WireAssignmentNames;
     std::vector<std::pair<std::string,t_instr_nfo> >                  m_WireAssignments;
     /// \brief all combinational blocks
     std::list< t_combinational_block* >                               m_Blocks;
-    /// \brief state name to combinational block
-    std::unordered_map< std::string, t_combinational_block* >         m_State2Block;
-    /// \brief id to combination block
-    std::unordered_map< size_t, t_combinational_block* >              m_Id2Block;
-    /// \brief stores encountered forwards refs for later resolution
-    std::unordered_map< std::string, std::vector< t_forward_jump > >  m_JumpForwardRefs;
-    /// \brief maximum state value of the algorithm
-    int m_MaxState      = -1;
     /// \brief integer name of the next block
-    int m_NextBlockName = 1;
+    int                                                               m_NextBlockName = 1;
+
+    /// \brief indicates whether this algorithm uses the deprecated algorithm syntax (instead of 'unit')
+    bool        m_UsesLegacySnytax = false;
     /// \brief indicates whether this algorithm is the topmost in the design
-    bool m_TopMost      = false;
+    bool        m_TopMost      = false;
     /// \brief indicates whether a FSM report has to be generated and what the filename is (empty means none)
     std::string m_ReportBaseName;
     /// \brief internally set to true when the report has to be written
@@ -597,7 +677,7 @@ private:
     /// \brief recalls whether the algorithm is already optimized
     bool        m_Optimized = false;
 
-    std::string fsmReportName() const { return m_ReportBaseName  + ".fsm.log"; }
+    std::string fsmReportName(std::string sourceFile) const { return LibSL::StlHelpers::extractFileName(sourceFile) + ".fsm.log"; }
     std::string vioReportName() const { return m_ReportBaseName + ".vio.log"; }
     std::string algReportName() const { return m_ReportBaseName + ".alg.log"; }
 
@@ -613,18 +693,20 @@ private:
     /// \brief checks whether an identifier is a VIO
     bool isVIO(std::string var) const;
     /// \brief returns a VIO definition
-    t_var_nfo getVIODefinition(std::string var, bool &_found) const;
+    t_var_nfo getVIODefinition(std::string var, bool &_found) const override;
     /// \brief variant of above (historical reasons, TODO: cleanup)
     bool getVIONfo(std::string vio, t_var_nfo &_nfo) const;
     /// \brief checks whether an identifier is a group VIO
     bool isGroupVIO(std::string var) const;
+    /// \brief returns whether an inout is used by the unit (accessed)
+    bool isInOutAccessed(std::string var) const;
     /// \brief rewrites a constant
     std::string rewriteConstant(std::string cst) const;
     /// \brief returns a string representing the widthof value
-    std::string resolveWidthOf(std::string vio, antlr4::misc::Interval interval) const;
+    std::string resolveWidthOf(std::string vio, const t_instantiation_context &ictx, const Utils::t_source_loc& srcloc) const override;
     /// \brief adds a combinational block to the list of blocks, performs book keeping
     template<class T_Block = t_combinational_block>
-    t_combinational_block *addBlock(std::string name, const t_combinational_block *parent, const t_combinational_block_context *bctx = nullptr, antlr4::misc::Interval interval = antlr4::misc::Interval::INVALID);
+    t_combinational_block *addBlock(std::string name, t_combinational_block *parent, const t_combinational_block_context *bctx = nullptr, const Utils::t_source_loc& srcloc = Utils::nowhere);
     /// \brief resets the block name generator
     void resetBlockName();
     /// \brief generate the next block name
@@ -639,20 +721,28 @@ private:
     std::string gatherBitfieldValue(siliceParser::InitBitfieldContext* ival);
     /// \brief gather a value
     std::string gatherValue(siliceParser::ValueContext* ival);
-    /// \brief insert a variable in the data-structures (lower level than addVar, use to insert any var), return the index in m_Vars of the inserted var
+    /// \brief insert a variable in the data-structures (lower level than addVar, no renaming)
     void insertVar(const t_var_nfo &_var, t_combinational_block *_current);
     /// \brief add a variable from its definition (_var may be modified with an updated name)
-    void addVar(t_var_nfo& _var, t_combinational_block *_current, antlr4::misc::Interval interval = antlr4::misc::Interval::INVALID);
+    void addVar(t_var_nfo& _var, t_combinational_block *_current, const Utils::t_source_loc& srcloc);
     /// \brief check if an identifier is available
-    bool isIdentifierAvailable(std::string name) const;
+    e_IdentifierAvailability isIdentifierAvailable(t_combinational_block* _current, std::string base_name, std::string name = std::string()) const;
+    /// \brief returns the name of a delayed assignment temporary variable
+    std::string delayedName(siliceParser::AlwaysAssignedContext* alw) const;
+    /// \brief returns the name of a temporary from the expression and its context
+    std::string temporaryName(siliceParser::Expression_0Context *expr, const t_combinational_block *_current, int __id) const;
+    /// \brief add a temporary for an expression to the block
+    void addTemporary(std::string vname, siliceParser::Expression_0Context *expr, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather type nfo
-    void gatherTypeNfo(siliceParser::TypeContext *type,t_type_nfo &_nfo, t_combinational_block *_current, t_gather_context *_context, std::string& _is_group);
+    void gatherTypeNfo(siliceParser::TypeContext *type,t_type_nfo &_nfo, const t_combinational_block *_current, std::string& _is_group);
     /// \brief gather wire declaration
-    void gatherDeclarationWire(siliceParser::DeclarationWireContext* decl, t_combinational_block *_current, t_gather_context *_context);
+    void gatherDeclarationWire(siliceParser::DeclarationWireContext* decl, t_combinational_block *_current);
     /// \brief gather variable nfo
-    void gatherVarNfo(siliceParser::DeclarationVarContext *decl, t_var_nfo &_nfo, bool default_no_init, t_combinational_block *_current, t_gather_context *_context,std::string& _is_group);
+    ///  returns the name of the group in _is_group if the variable is a group
+    ///  returns the initializing expression in _expr is the variable is initialized with an expression
+    void gatherVarNfo(siliceParser::DeclarationVarContext *decl, t_var_nfo &_nfo, bool default_no_init, const t_combinational_block *_current, std::string& _is_group, siliceParser::Expression_0Context* &_expr);
     /// \brief gather variable declaration
-    void gatherDeclarationVar(siliceParser::DeclarationVarContext* decl, t_combinational_block *_current, t_gather_context *_context);
+    void gatherDeclarationVar(siliceParser::DeclarationVarContext* decl, t_combinational_block *_current, t_gather_context *_context, bool disallow_expr_init);
     /// \brief gather all values from an init list
     void gatherInitList(siliceParser::InitListContext* ilist, std::vector<std::string>& _values_str);
     /// \brief gather all values from a file
@@ -660,20 +750,22 @@ private:
     /// \bried read initializer list
     template<typename D, typename T> void readInitList(D* decl, T& var);
     /// \brief gather table nfo
-    void gatherTableNfo(siliceParser::DeclarationTableContext *decl, t_var_nfo &_nfo, t_combinational_block *_current, t_gather_context *_context);
+    void gatherTableNfo(siliceParser::DeclarationTableContext *decl, t_var_nfo &_nfo, t_combinational_block *_current);
     /// \brief gather variable declaration
-    void gatherDeclarationTable(siliceParser::DeclarationTableContext* decl, t_combinational_block *_current, t_gather_context *_context);
+    void gatherDeclarationTable(siliceParser::DeclarationTableContext* decl, t_combinational_block *_current);
     /// \brief gather memory declaration
-    void gatherDeclarationMemory(siliceParser::DeclarationMemoryContext* decl, t_combinational_block *_current, t_gather_context *_context);
+    void gatherDeclarationMemory(siliceParser::DeclarationMemoryContext* decl, t_combinational_block *_current);
     /// \brief extract the list of bindings
     void getBindings(
       siliceParser::BpBindingListContext *bindings,
       std::vector<t_binding_nfo>& _vec_bindings,
       bool& _autobind) const;
     /// \brief gather group declaration
-    void gatherDeclarationGroup(siliceParser::DeclarationInstanceContext* grp, t_combinational_block *_current, t_gather_context *_context);
+    void gatherDeclarationGroup(siliceParser::DeclarationInstanceContext* grp, t_combinational_block *_current);
+    /// \brief instantiates a blueprint given the instantiation context
+    void instantiateBlueprint(t_instanced_nfo& _nfo, const t_instantiation_context& ictx);
     /// \brief gather blueprint instance declaration
-    void gatherDeclarationInstance(siliceParser::DeclarationInstanceContext* alg, t_combinational_block* _current, t_gather_context* _context);
+    void gatherDeclarationInstance(siliceParser::DeclarationInstanceContext* alg, t_combinational_block* _current, t_gather_context *_context);
     /// \brief gather past checks
     void gatherPastCheck(siliceParser::Was_atContext *chk, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather stable checks
@@ -682,8 +774,6 @@ private:
     void gatherStableCheck(siliceParser::AssumestableContext *chk, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather stableinput checks
     void gatherStableinputCheck(siliceParser::StableinputContext *ctx, t_combinational_block *_current, t_gather_context *_context);
-    /// \brief expands the name of a subroutine vio
-    std::string subroutineVIOName(std::string vio, const t_subroutine_nfo *sub);
     /// \brief expands the name of a block vio
     std::string blockVIOName(std::string vio, const t_combinational_block *host);
     /// \brief returns the name of a trickling vio for a stage of a piepline
@@ -692,33 +782,44 @@ private:
     std::string tricklingVIOName(std::string vio, const t_pipeline_stage_nfo *nfo) const;
     /// \brief translate a variable name using subroutine/pipeline info
     std::string translateVIOName(std::string vio, const t_combinational_block_context *bctx) const;
-    /// \brief Ecanpsulates the identifier in whatever is required after rewrite
+    /// \brief returns a string representing the bond variable
+    std::string rewriteBinding(std::string var, const t_combinational_block_context *bctx, const t_instantiation_context& ictx) const;
+    /// \brief encapsulates the identifier in whatever is required after rewrite
     std::string encapsulateIdentifier(std::string var, bool read_access, std::string rewritten, std::string suffix) const;
     /// \brief returns the rewritten indentifier, taking into account bindings, inputs/outputs, custom clocks and resets
     std::string rewriteIdentifier(
       std::string prefix, std::string var, std::string suffix,
-      const t_combinational_block_context *bctx, size_t line,
+      const t_combinational_block_context *bctx, const t_instantiation_context& ictx,
+      const Utils::t_source_loc& srcloc,
       std::string ff, bool read_access,
-      const t_vio_dependencies &dependencies, 
+      const t_vio_dependencies &dependencies,
       t_vio_ff_usage &_ff_usage, e_FFUsage ff_force = e_None) const;
     /// \brief rewrite an expression, renaming identifiers
-    std::string rewriteExpression(std::string prefix, antlr4::tree::ParseTree *expr, int __id, const t_combinational_block_context* bctx, std::string ff, bool read_access, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
+    std::string rewriteExpression(std::string prefix, antlr4::tree::ParseTree *expr, int __id, const t_combinational_block_context* bctx, const t_instantiation_context &ictx, std::string ff, bool read_access, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief returns true if an expression is a single identifier
     bool isIdentifier(antlr4::tree::ParseTree *expr, std::string& _identifier) const;
     /// \brief returns true if an expression is an access
     bool isAccess(antlr4::tree::ParseTree *expr, siliceParser::AccessContext*& _access) const;
+    /// \brief returns true if an expression is a constant (does not perform collapsing yet)
+    bool isConst(antlr4::tree::ParseTree *expr, std::string& _const) const;
+    /// \brief returns true if a tree contains a pipeline
+    bool hasPipeline(antlr4::tree::ParseTree* tree) const;
     /// \brief split current block (state present) or continue current with the next instruction list
-    t_combinational_block *splitOrContinueBlock(siliceParser::InstructionListContext* ilist, t_combinational_block *_current, t_gather_context *_context);
+    t_combinational_block *splitOrContinueBlock(siliceParser::InstructionListItemContext* ilist, t_combinational_block *_current, t_gather_context *_context);
+    /// \brief returns true if node is in a loop body
+    bool isInWhileBody(const antlr4::tree::ParseTree* node) const;
     /// \brief gather a break from loop
     t_combinational_block *gatherBreakLoop(siliceParser::BreakLoopContext* brk, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather a while block
     t_combinational_block *gatherWhile(siliceParser::WhileLoopContext* loop, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather declaration
-    void gatherDeclaration(siliceParser::DeclarationContext *decl, t_combinational_block *_current, t_gather_context *_context, bool var_group_table_only);
-    /// \brief gather declaration list, returns number of gathered declarations 
-    int gatherDeclarationList(siliceParser::DeclarationListContext* decllist, t_combinational_block *_current, t_gather_context *_context, bool var_group_table_only);
+    void gatherDeclaration(siliceParser::DeclarationContext *decl, t_combinational_block *_current, t_gather_context *_context, e_DeclType allowed);
     /// \brief gather a subroutine
     t_combinational_block *gatherSubroutine(siliceParser::SubroutineContext* sub, t_combinational_block *_current, t_gather_context *_context);
+    /// \brief concatenate a pipeline to an existing one
+    t_combinational_block *concatenatePipeline(siliceParser::PipelineContext* pip, t_combinational_block *_current, t_gather_context *_context, t_pipeline_nfo *nfo);
+    /// \brief returns true if pip is spawning a new pipeline
+    bool isSpawningNewPipeline(const siliceParser::PipelineContext* pip) const;
     /// \brief gather a pipeline
     t_combinational_block *gatherPipeline(siliceParser::PipelineContext* pip, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather a jump
@@ -732,9 +833,9 @@ private:
     /// \brief gather a join execution
     t_combinational_block *gatherJoinExec(siliceParser::JoinExecContext* join, t_combinational_block *_current, t_gather_context *_context);
     /// \brief tests whether a graph of block is stateless
-    bool isStateLessGraph(t_combinational_block *head) const;
-    /// \brief find all non-comibnation leaves from this block
-    void findNonCombinationalLeaves(const t_combinational_block *head,std::set<t_combinational_block*>& _leaves) const;
+    bool isStateLessGraph(const t_combinational_block *head) const;
+    /// \brief returns all the blocks which are next states
+    void findNextStates(t_combinational_block* head, std::set< t_combinational_block*>& _exits) const;
     /// \brief gather an if-then-else
     t_combinational_block *gatherIfElse(siliceParser::IfThenElseContext* ifelse, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather an if-then
@@ -744,7 +845,7 @@ private:
     /// \brief gather a repeat block
     t_combinational_block *gatherRepeatBlock(siliceParser::RepeatBlockContext* repeat, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather always assigned
-    void gatherAlwaysAssigned(siliceParser::AlwaysAssignedListContext* alws, t_combinational_block *always);
+    void gatherAlwaysAssigned(siliceParser::AlwaysAssignedContext* alw, t_combinational_block *always);
     /// \brief check access permissions (recursively) from a specific node
     void checkPermissions(antlr4::tree::ParseTree *node, t_combinational_block *_current);
     /// \brief check access permissions on all block instructions
@@ -756,21 +857,19 @@ private:
     /// \brief Verifies validity of bindings on instanced blueprints
     void checkBlueprintsBindings(const t_instantiation_context &ictx) const;
     /// \brief gather info about an input
-    void gatherInputNfo(siliceParser::InputContext* input, t_inout_nfo& _io, t_combinational_block *_current, t_gather_context *_context);
+    void gatherInputNfo(siliceParser::InputContext* input, t_inout_nfo& _io, const t_combinational_block *_current);
     /// \brief gather info about an output
-    void gatherOutputNfo(siliceParser::OutputContext* input, t_output_nfo& _io, t_combinational_block *_current, t_gather_context *_context);
+    void gatherOutputNfo(siliceParser::OutputContext* input, t_output_nfo& _io, const t_combinational_block *_current);
     /// \brief gather info about an inout
-    void gatherInoutNfo(siliceParser::InoutContext* inout, t_inout_nfo& _io);
+    void gatherInoutNfo(siliceParser::InoutContext* inout, t_inout_nfo& _io, const t_combinational_block *_current);
     /// \brief gather infos about an io definition (group/interface)
-    void gatherIoDef(siliceParser::IoDefContext *iod, t_combinational_block *_current, t_gather_context *_context);
+    void gatherIoDef(siliceParser::IoDefContext *iod, const t_combinational_block *_current);
     /// \brief gather infos about outputs of an algorithm
-    void gatherAllOutputsNfo(siliceParser::OutputsContext *allouts, t_combinational_block *_current, t_gather_context *_context);
+    void gatherAllOutputsNfo(siliceParser::OutputsContext *allouts, const t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather infos about an io group
-    void gatherIoGroup(siliceParser::IoDefContext * iog, t_combinational_block *_current, t_gather_context *_context);
+    void gatherIoGroup(siliceParser::IoDefContext * iog, const t_combinational_block *_current);
     /// \brief gather infos about an io interface
     void gatherIoInterface(siliceParser::IoDefContext *itrf);
-    /// \brief gather inputs and outputs
-    void gatherIOs(siliceParser::InOutListContext* inout, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather a block
     t_combinational_block *gatherBlock(siliceParser::BlockContext *block, t_combinational_block *_current, t_gather_context *_context);
     /// \brief extract the ordered list of parameters for calling an algorithm or subroutine (call and return)
@@ -781,38 +880,66 @@ private:
     void parseCallParams(siliceParser::CallParamListContext *params, const Algorithm *alg, bool input_else_output, const t_combinational_block_context *bctx, std::vector<t_call_param> &_matches) const;
     /// \brief parse call parameters for a subroutine
     void parseCallParams(siliceParser::CallParamListContext *params, const t_subroutine_nfo *sub, bool input_else_output, const t_combinational_block_context *bctx, std::vector<t_call_param> &_matches) const;
-    /// \brief extract the ordered list of identifiers
-    void getIdentifiers(siliceParser::IdOrIoAccessListContext* idents, std::vector<std::string>& _vec_params, const t_combinational_block_context* bctx) const;
-    /// \brief sematic parsing, first discovery pass
+    /// \brief extract the ordered list of identifiers, creating temporaries if needed
+    void getIdentifiers(siliceParser::CallParamListContext *params, std::vector<std::string>& _vec_params, t_combinational_block* _current, t_gather_context* _context, std::vector<std::pair<std::string,siliceParser::Expression_0Context*> >& _tempos_needed);
+    /// \brief parsing, first discovery pass
     t_combinational_block *gather(antlr4::tree::ParseTree *tree, t_combinational_block *_current, t_gather_context *_context);
+    /// \brief resolves forward references for jumps for a given fsm
+    void resolveForwardJumpRefs(const t_fsm_nfo *);
     /// \brief resolves forward references for jumps
     void resolveForwardJumpRefs();
-    /// \brief generates the states for the entire algorithm
-    void generateStates();
+    /// \brief performs a pass on all ifelse to prevent code duplication of after, returns true if states where changed
+    bool preventIfElseCodeDup(t_fsm_nfo* fsm);
+    /// \brief pad pipeline to ensure it ends on a 'simple' state (without multiple possible next state), returns true if states where changed
+    bool padPipeline(t_fsm_nfo* fsm);
+    /// \brief performs a numbering pass on the fsm states
+    void renumberStates(t_fsm_nfo*);
+    /// \brief generates the states of an fsm
+    void generateStates(t_fsm_nfo *);
+    /// \brief gets all the blocks belonging to the fsm
+    void fsmGetBlocks(t_fsm_nfo *fsm, std::unordered_set<t_combinational_block *>& _blocks) const;
+    /// \brief returns the index name of the fsm
+    std::string fsmIndex(const t_fsm_nfo *) const;
+    /// \brief returns the 'ready' signal name of the pipeline stage fsm
+    std::string fsmPipelineStageReady(const t_fsm_nfo *) const;
+    /// \brief returns the 'full' signal name of the pipeline stage fsm
+    std::string fsmPipelineStageFull(const t_fsm_nfo *) const;
+    /// \brief returns the 'stall' signal name of the pipeline stage fsm
+    std::string fsmPipelineStageStall(const t_fsm_nfo *) const;
+    /// \brief returns the 'first state disable' signal name of the pipeline stage fsm
+    std::string fsmPipelineFirstStateDisable(const t_fsm_nfo *) const;
+    /// \brief returns an expression that evaluates to the fsm next state
+    std::string fsmNextState(std::string prefix, const t_fsm_nfo *) const;
+    /// \brief returns whether the fsm is empty (no state)
+    bool fsmIsEmpty(const t_fsm_nfo *) const;
+    /// \brief returns the fsm parent trigger state (-1 if none)
+    int fsmParentTriggerState(const t_fsm_nfo *) const;
     /// \brief returns the max state value of the algorithm
-    int maxState() const;
-    /// \brief returns the index of the entry state
-    int entryState() const;
+    int maxState(const t_fsm_nfo *) const;
+    /// \brief returns the index of the entry state of the algorithm
+    int entryState(const t_fsm_nfo *) const;
+    /// \brief returns the index of the last state of the pipeline stage fsm (the one before termination)
+    int lastPipelineStageState(const t_fsm_nfo *) const;
     /// \brief returns the index to jump to to intitate the termination sequence
-    int terminationState() const;
-    /// \brief returns the state bit-width required to encode up to max_state
-    int width(int max_state) const;
+    int terminationState(const t_fsm_nfo *) const;
+    /// \brief returns the bit-width required to encode val
+    int width(int val) const;
     /// \brief returns the state bit-width for the algorithm
-    int stateWidth() const;
+    int stateWidth(const t_fsm_nfo *) const;
     /// \brief fast-forward to the next non empty state
     const t_combinational_block *fastForward(const t_combinational_block *block) const;
     /// \brief verify member in group
-    void verifyMemberGroup(std::string member, siliceParser::GroupContext* group, int line) const;
+    void verifyMemberGroup(std::string member, siliceParser::GroupContext* group) const;
     /// \brief verify member in interface
-    void verifyMemberInterface(std::string member, siliceParser::IntrfaceContext *intrface, int line) const;
+    void verifyMemberInterface(std::string member, siliceParser::IntrfaceContext *intrface) const;
     /// \brief verify member in group definition
-    void verifyMemberGroup(std::string member, const t_group_definition& gd, int line) const;
+    void verifyMemberGroup(std::string member, const t_group_definition& gd) const;
     /// \brief get the list of members within a group
     std::vector<std::string> getGroupMembers(const t_group_definition &gd) const;
     /// \brief verify member in bitfield
-    void verifyMemberBitfield(std::string member, siliceParser::BitfieldContext* group, int line) const;
+    void verifyMemberBitfield(std::string member, siliceParser::BitfieldContext* group) const;
     /// \brief run optimizations
-    void optimize();
+    void optimize(const t_instantiation_context& ictx);
     ///\brief Runs the linter on the algorithm, at instantiation time
     void lint(const t_instantiation_context &ictx);
 
@@ -821,8 +948,12 @@ private:
 
   private:
 
+    /// \brief update and check variable dependencies for sets of written and read vios
+    void updateAndCheckDependencies(t_vio_dependencies& _depds, const Utils::t_source_loc& sloc, const std::unordered_set<std::string>& read,const std::unordered_set<std::string>& written, const t_combinational_block* block) const;
     /// \brief update and check variable dependencies for an instruction
-    void updateAndCheckDependencies(t_vio_dependencies& _depds, antlr4::tree::ParseTree* instr, const t_combinational_block_context* bctx) const;
+    void updateAndCheckDependencies(t_vio_dependencies& _depds, antlr4::tree::ParseTree* instr, const t_combinational_block* block) const;
+    ///  \brief compute closure on dependencies
+    void dependencyClosure(t_vio_dependencies& _depds) const;
     /// \brief merge variable dependencies
     void mergeDependenciesInto(const t_vio_dependencies& _depds0, t_vio_dependencies& _depds) const;
     /// \brief update flip-flop usage
@@ -839,26 +970,39 @@ private:
     std::string determineAccessedVar(siliceParser::PartSelectContext* access, const t_combinational_block_context* bctx) const;
     std::string determineAccessedVar(siliceParser::BitfieldAccessContext* access, const t_combinational_block_context* bctx) const;
     std::string determineAccessedVar(siliceParser::TableAccessContext* access, const t_combinational_block_context* bctx) const;
+    /// \brief determine if the access is partial (bitselect or table)
+    bool        isPartialAccess(siliceParser::AccessContext* access, const t_combinational_block_context* bctx) const;
+    bool        isPartialAccess(siliceParser::IoAccessContext* access, const t_combinational_block_context* bctx) const;
+    bool        isPartialAccess(siliceParser::PartSelectContext* access, const t_combinational_block_context* bctx) const;
+    bool        isPartialAccess(siliceParser::BitfieldAccessContext* access, const t_combinational_block_context* bctx) const;
+    bool        isPartialAccess(siliceParser::TableAccessContext* access, const t_combinational_block_context* bctx) const;
     /// \brief determine which VIO are accessed by an instruction (from its tree)
     void determineVIOAccess(
       antlr4::tree::ParseTree*                    node,
       const std::unordered_map<std::string, int>& vios,
-      const t_combinational_block_context        *bctx,
+      const t_combinational_block                *block,
       std::unordered_set<std::string>& _read, std::unordered_set<std::string>& _written) const;
     /// \brief determine variables written outside of pipeline
-    void determineOutOfPipelineAssignments(
+    void determinePipelineSpecificAssignments(
       antlr4::tree::ParseTree *node,
       const std::unordered_map<std::string, int> &vios,
       const t_combinational_block_context *bctx,
-      std::unordered_set<std::string> &_ex_written,std::unordered_set<std::string> &_not_ex_written) const;
+      std::unordered_set<std::string> &_ex_written_backward, std::unordered_set<std::string> &_ex_written_forward, std::unordered_set<std::string> &_ex_written_after,
+      std::unordered_set<std::string> &_not_ex_written) const;
     /// \brief updates access to vars due to a binding
     template<typename T_nfo>
     void updateAccessFromBinding(const t_binding_nfo& b, const std::unordered_map<std::string, int > &names, std::vector< T_nfo > &_nfos);
+    /// \brief get all block instructions for analysis
+    void getAllBlockInstructions(t_combinational_block *block, std::vector<t_instr_nfo>& _instr) const;
+    /// \brief determine which VIO are accessed by a block
+    void determineBlockVIOAccess(t_combinational_block *block,
+      const std::unordered_map<std::string, int>& vios,
+      std::unordered_set<std::string>& _read, std::unordered_set<std::string>& _written, std::unordered_set<std::string>& _declared) const;
     /// \brief determines variable access for an instruction
     void determineAccess(
       antlr4::tree::ParseTree             *instr,
-      const t_combinational_block_context *context,
-      std::unordered_set<std::string> &_already_written, 
+      const t_combinational_block         *block,
+      std::unordered_set<std::string> &_already_written,
       std::unordered_set<std::string> &_in_vars_read,
       std::unordered_set<std::string> &_out_vars_written);
     /// \brief determines variable access within a block
@@ -873,10 +1017,12 @@ private:
       std::unordered_set<std::string> &_global_in_read,
       std::unordered_set<std::string> &_global_out_written
     );
+    /// \brief determine the type of temporaries from their expressions
+    void determineTemporaries(const t_instantiation_context& ictx);
     /// \brief analyze variables access and classifies variables
     void determineUsage();
     /// \brief determines the list of bound VIO
-    void determineBlueprintBoundVIO();
+    void determineBlueprintBoundVIO(const t_instantiation_context& ictx);
     /// \brief analyze the subroutine calls
     void analyzeSubroutineCalls();
     /// \brief analyze usage of inputs of instanced blueprints
@@ -885,61 +1031,64 @@ private:
     void autobindInstancedBlueprint(t_instanced_nfo& _bp);
     /// \brief resove e_Auto binding directions
     void resolveInstancedBlueprintBindingDirections(t_instanced_nfo& _bp);
+    /// \brief resolve inouts
+    void resolveInOuts();
+    ///  \brief adds variables for non bound instanced blueprint inputs and outputs
+    void createInstancedBlueprintInputOutputVars(t_instanced_nfo& _bp);
+    /// \brief resolves the type of a var from an instanced blueprint
+    template<typename T_nfo>
+    void resolveTypeFromBlueprint(const t_instanced_nfo& bp, const t_instantiation_context &ictx, t_var_nfo& vnfo, T_nfo& ref);
+    ///  \brief resolves all blueprint parameterized ios, fixing their true type
+    void resolveInstancedBlueprintInputOutputVarTypes(const t_instanced_nfo& bp, const t_instantiation_context &ictx);
     /// \brief returns true if the algorithm does not have an FSM
     bool hasNoFSM() const;
     /// \brief returns true if the algorithm does not call subroutines
     bool doesNotCallSubroutines() const;
     /// \brief converts an internal state into a FSM state
-    int  toFSMState(int state) const;
+    int  toFSMState(const t_fsm_nfo *fsm, int state) const;
+    /// \brief return the FSM state of a block, does fastforward
+    int  fastForwardToFSMState(const t_fsm_nfo* fsm, const t_combinational_block* block) const;
     /// \brief finds the binding to var
-    const t_binding_nfo &findBindingTo(std::string var, const std::vector<t_binding_nfo> &bndgs, bool &_found) const;
-    /// \brief returns the line range of an instruction
-    v2i instructionLines(antlr4::tree::ParseTree *instr, const t_instantiation_context &ictx) const;
+    const t_binding_nfo &findBindingLeft(std::string left, const std::vector<t_binding_nfo> &bndgs, bool &_found) const;
+    /// \brief finds the binding on var
+    const t_binding_nfo &findBindingRight(std::string right, const std::vector<t_binding_nfo> &bndgs, bool &_found) const;
 
   public:
 
     /// \brief constructor
     Algorithm(
-      std::string name, bool hasHash,
-      std::string clock, std::string reset,
-      bool autorun, bool onehot, std::string formalDepth, std::string formalTimeout, const std::vector<std::string> &modes,
-      const std::unordered_map<std::string, AutoPtr<Blueprint> >&              known_blueprints,
       const std::unordered_map<std::string, siliceParser::SubroutineContext*>& known_subroutines,
       const std::unordered_map<std::string, siliceParser::CircuitryContext*>&  known_circuitries,
       const std::unordered_map<std::string, siliceParser::GroupContext*>&      known_groups,
       const std::unordered_map<std::string, siliceParser::IntrfaceContext *>&  known_interfaces,
       const std::unordered_map<std::string, siliceParser::BitfieldContext*>&   known_bitfield);
+
+
+    /// \brief initializes the aglorithm
+    void init(
+      std::string name, bool hasHash,
+      std::string clock, std::string reset,
+      bool autorun, bool onehot, std::string formalDepth, std::string formalTimeout, const std::vector<std::string> &modes);
+    /// \brief gather inputs and outputs from the parsed tree
+    void gatherIOs(siliceParser::InOutListContext* inout);
+    /// \brief gather the body from the parsed tree
+    void gatherBody(antlr4::tree::ParseTree *body, const Blueprint::t_instantiation_context& ictx);
+
     /// \brief destructor
     virtual ~Algorithm();
 
-    /// \brief sets the input parsed tree
-    void gather(siliceParser::InOutListContext *inout, antlr4::tree::ParseTree *declAndInstr);
-
-    /// \brief resolve instanced blueprint refs
-    void resolveInstancedBlueprintRefs(const std::unordered_map<std::string, AutoPtr<Blueprint> >& blueprints);
-    /// \brief resolve inouts
-    void resolveInOuts();
-
   private:
 
-    /// \brief returns variable bit range for verilog declaration
-    std::string varBitRange(const t_var_nfo& v, const t_instantiation_context &ictx) const;
-    /// \brief returns a variable bit width for verilog use
-    std::string varBitWidth(const t_var_nfo &v, const t_instantiation_context &ictx) const;
-    /// \brief returns a variable init value for verilog use (non-tables only)
-    std::string varInitValue(const t_var_nfo &v, const t_instantiation_context &ictx) const;
-    /// \brief returns the base type of a variable
-    e_Type      varType     (const t_var_nfo& v, const t_instantiation_context &ictx) const;
-    /// \brief returns a type dependent string for resource declaration
-    std::string typeString(e_Type type) const;
     /// \brief finds the root of a same_as chain
     std::string findSameAsRoot(std::string vio, const t_combinational_block_context *bctx) const;
     /// \brief write a verilog wire/reg declaration, possibly parameterized
-    void writeVerilogDeclaration(std::ostream &out, const t_instantiation_context &ictx, std::string base, const t_var_nfo &v, std::string postfix) const;
+    void writeVerilogDeclaration(std::ostream& out, const t_instantiation_context &ictx, std::string base, const t_var_nfo &v, std::string postfix) const;
+    /// \brief write a verilog wire/reg declaration for a blueprint io, possibly parameterized
+    void writeVerilogDeclaration(const Blueprint *bp, std::ostream& out, const t_instantiation_context &ictx, std::string base, const t_var_nfo &v, std::string postfix) const;
     /// \brief determines identifier bit width and (if applicable) table size
-    std::tuple<t_type_nfo, int> determineIdentifierTypeWidthAndTableSize(const t_combinational_block_context *bctx, antlr4::tree::TerminalNode *identifier, antlr4::misc::Interval interval, int line) const;
+    std::tuple<t_type_nfo, int> determineIdentifierTypeWidthAndTableSize(const t_combinational_block_context *bctx, antlr4::tree::TerminalNode *identifier, const Utils::t_source_loc& srloc) const;
     /// \brief determines identifier type and width
-    t_type_nfo determineIdentifierTypeAndWidth(const t_combinational_block_context *bctx, antlr4::tree::TerminalNode *identifier, antlr4::misc::Interval interval, int line) const;
+    t_type_nfo determineIdentifierTypeAndWidth(const t_combinational_block_context *bctx, antlr4::tree::TerminalNode *identifier, const Utils::t_source_loc& srloc) const;
     /// \brief determines bitfield access bit width
     t_type_nfo determineBitfieldAccessTypeAndWidth(const t_combinational_block_context *bctx, siliceParser::BitfieldAccessContext *ioaccess) const;
     /// \brief determines IO access bit width
@@ -950,70 +1099,78 @@ private:
     t_type_nfo determineTableAccessTypeAndWidth(const t_combinational_block_context *bctx, siliceParser::TableAccessContext *tblaccess) const;
     /// \brief determines access type/width
     t_type_nfo determineAccessTypeAndWidth(const t_combinational_block_context *bctx, siliceParser::AccessContext *access, antlr4::tree::TerminalNode *identifier) const;
+    /// \brief determines access on a const bit range (returns -1,-1 if not applicable)
+    v2i determineAccessConstBitRange(siliceParser::AccessContext *access, const t_combinational_block_context *bctx) const;
+    v2i determineAccessConstBitRange(siliceParser::BitfieldAccessContext *access, const t_combinational_block_context *bctx, v2i range) const;
+    v2i determineAccessConstBitRange(siliceParser::PartSelectContext *access, const t_combinational_block_context *bctx) const;
     /// \brief writes a call to an algorithm
-    void writeAlgorithmCall(antlr4::tree::ParseTree *node, std::string prefix, std::ostream& out, const t_instanced_nfo& a, siliceParser::CallParamListContext *plist, const t_combinational_block_context *bctx, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
+    void writeAlgorithmCall(antlr4::tree::ParseTree *node, std::string prefix, std::ostream& out, const t_instanced_nfo& a, siliceParser::CallParamListContext *plist, const t_combinational_block_context *bctx, const t_instantiation_context &ictx, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes reading back the results of an algorithm
-    void writeAlgorithmReadback(antlr4::tree::ParseTree *node, std::string prefix, std::ostream& out, const t_instanced_nfo& a, siliceParser::CallParamListContext *plist, const t_combinational_block_context *bctx, t_vio_ff_usage &_ff_usage) const;
+    void writeAlgorithmReadback(antlr4::tree::ParseTree *node, std::string prefix, std::ostream& out, const t_instanced_nfo& a, siliceParser::CallParamListContext *plist, const t_combinational_block_context *bctx, const t_instantiation_context &ictx, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes a call to a subroutine
-    void writeSubroutineCall(antlr4::tree::ParseTree *node, std::string prefix, std::ostream& out, const t_subroutine_nfo* called, const t_combinational_block_context* bctx, siliceParser::CallParamListContext *plist, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
+    void writeSubroutineCall(antlr4::tree::ParseTree *node, std::string prefix, std::ostream& out, const t_subroutine_nfo* called, const t_combinational_block_context* bctx, const t_instantiation_context &ictx, siliceParser::CallParamListContext *plist, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes reading back the results of a subroutine
-    void writeSubroutineReadback(antlr4::tree::ParseTree *node, std::string prefix, std::ostream& out, const t_subroutine_nfo* called, const t_combinational_block_context* bctx, siliceParser::CallParamListContext *plist, t_vio_ff_usage &_ff_usage) const;
+    void writeSubroutineReadback(antlr4::tree::ParseTree *node, std::string prefix, std::ostream& out, const t_subroutine_nfo* called, const t_combinational_block_context* bctx, const t_instantiation_context &ictx, siliceParser::CallParamListContext *plist, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes access to an algorithm in/out, memory or group member ; returns info of accessed member.
-    std::tuple<t_type_nfo, int> writeIOAccess(std::string prefix, std::ostream& out, bool assigning, siliceParser::IoAccessContext* ioaccess, std::string suffix, int __id, const t_combinational_block_context* bctx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
+    std::tuple<t_type_nfo, int> writeIOAccess(std::string prefix, std::ostream& out, bool assigning, siliceParser::IoAccessContext* ioaccess, std::string suffix, int __id, const t_combinational_block_context* bctx, const t_instantiation_context& ictx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes access to a table in/out
-    void writeTableAccess(std::string prefix, std::ostream& out, bool assigning, siliceParser::TableAccessContext* tblaccess, std::string suffix, int __id, const t_combinational_block_context* bctx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
+    void writeTableAccess(std::string prefix, std::ostream& out, bool assigning, siliceParser::TableAccessContext* tblaccess, std::string suffix, int __id, const t_combinational_block_context* bctx, const t_instantiation_context &ictx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes access to a bitfield member
-    void writeBitfieldAccess(std::string prefix, std::ostream& out, bool assigning, siliceParser::BitfieldAccessContext* ioaccess, std::pair<std::string, std::string> range, int __id, const t_combinational_block_context* bctx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
+    void writeBitfieldAccess(std::string prefix, std::ostream& out, bool assigning, siliceParser::BitfieldAccessContext* ioaccess, std::pair<std::string, std::string> range, int __id, const t_combinational_block_context* bctx, const t_instantiation_context &ictx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes part-select of bits
-    void writePartSelect(std::string prefix, std::ostream& out, bool assigning, siliceParser::PartSelectContext* partsel, int __id, const t_combinational_block_context *bctx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
+    void writePartSelect(std::string prefix, std::ostream& out, bool assigning, siliceParser::PartSelectContext* partsel, int __id, const t_combinational_block_context *bctx, const t_instantiation_context &ictx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes access to an identifier
-    void writeAccess(std::string prefix, std::ostream& out, bool assigning, siliceParser::AccessContext* access, int __id, const t_combinational_block_context *bctx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
+    void writeAccess(std::string prefix, std::ostream& out, bool assigning, siliceParser::AccessContext* access, int __id, const t_combinational_block_context *bctx, const t_instantiation_context &ictx, std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes an assignment
     void writeAssignement(std::string prefix, std::ostream& out,
       const t_instr_nfo& a,
       siliceParser::AccessContext *access,
       antlr4::tree::TerminalNode* identifier,
       siliceParser::Expression_0Context *expression_0,
-      const t_combinational_block_context *bctx,
+      const t_combinational_block_context *bctx, const t_instantiation_context &ictx,
       std::string ff, const t_vio_dependencies& dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes an assertion
     void writeAssert(std::string prefix,
-                     std::ostream &out,
+                     std::ostream& out,
                      const t_instr_nfo &a,
                      siliceParser::Expression_0Context *expression_0,
                      const t_combinational_block_context *bctx,
+                     const t_instantiation_context &ictx,
                      std::string ff,
                      const t_vio_dependencies &dependencies,
                      t_vio_ff_usage &_ff_usage) const;
     /// \brief writes an assumption
     void writeAssume(std::string prefix,
-                     std::ostream &out,
+                     std::ostream& out,
                      const t_instr_nfo &a,
                      siliceParser::Expression_0Context *expression_0,
                      const t_combinational_block_context *bctx,
+                     const t_instantiation_context &ictx,
                      std::string ff,
                      const t_vio_dependencies &dependencies,
                      t_vio_ff_usage &_ff_usage) const;
     /// \brief writes a restriction
     void writeRestrict(std::string prefix,
-                       std::ostream &out,
-                       const t_instr_nfo &a,
-                       siliceParser::Expression_0Context *expression_0,
-                       const t_combinational_block_context *bctx,
-                       std::string ff,
-                       const t_vio_dependencies &dependencies,
-                       t_vio_ff_usage &_ff_usage) const;
+                     std::ostream& out,
+                     const t_instr_nfo &a,
+                     siliceParser::Expression_0Context *expression_0,
+                     const t_combinational_block_context *bctx,
+                     const t_instantiation_context &ictx,
+                     std::string ff,
+                     const t_vio_dependencies &dependencies,
+                     t_vio_ff_usage &_ff_usage) const;
     /// \brief writes a cover
     void writeCover(std::string prefix,
-                    std::ostream &out,
+                    std::ostream& out,
                     const t_instr_nfo &a,
                     siliceParser::Expression_0Context *expression_0,
                     const t_combinational_block_context *bctx,
+                    const t_instantiation_context &ictx,
                     std::string ff,
                     const t_vio_dependencies &dependencies,
                     t_vio_ff_usage &_ff_usage) const;
     /// \brief writes all wire assignements
-    void writeWireAssignements(std::string prefix, std::ostream &out, t_vio_dependencies &_dependencies, t_vio_ff_usage &_ff_usage) const;
+    void writeWireAssignements(std::string prefix, std::ostream& out, const t_instantiation_context &ictx, t_vio_dependencies &_dependencies, t_vio_ff_usage &_ff_usage, bool first_pass) const;
     /// \brief writes flip-flop value update for a variable
     void writeVarFlipFlopUpdate(std::string prefix, std::string reset, std::ostream& out, const t_instantiation_context &ictx, const t_var_nfo& v) const;
     /// \brief writes the const declarations
@@ -1024,22 +1181,32 @@ private:
     void writeWireDeclarations(std::string prefix, std::ostream& out, const t_instantiation_context &ictx) const;
     /// \brief writes the flip-flop declarations
     void writeFlipFlopDeclarations(std::string prefix, std::ostream& out, const t_instantiation_context &ictx) const;
-    /// \brief writes the flip-flops
-    void writeFlipFlops(std::string prefix, std::ostream& out, const t_instantiation_context &ictx) const;
+    /// \brief writes the flip-flop updates
+    void writeFlipFlopUpdates(std::string prefix, std::ostream& out, const t_instantiation_context &ictx) const;
     /// \brief writes flip-flop combinational value update for a variable
     void writeVarFlipFlopCombinationalUpdate(std::string prefix, std::ostream& out, const t_var_nfo& v) const;
     /// \brief add a state to the queue
-    void pushState(const t_combinational_block *b, std::queue<size_t> &_q) const;
+    void pushState(const t_fsm_nfo *fsm,const t_combinational_block *b, std::queue<size_t> &_q) const;
     /// \brief writes combinational steps that are always performed /before/ the state machine
-    void writeCombinationalAlwaysPre(std::string prefix, std::ostream& out, const t_instantiation_context &ictx, t_vio_dependencies& _always_dependencies, t_vio_ff_usage &_ff_usage, t_vio_dependencies &_post_dependencies) const;
-    /// \brief writes all states in the output
-    void writeCombinationalStates(std::string prefix, std::ostream &out, const t_instantiation_context &ictx, const t_vio_dependencies &always_dependencies, t_vio_ff_usage &_ff_usage, t_vio_dependencies &_post_dependencies) const;
+    void writeCombinationalAlwaysPre(std::string prefix, t_writer_context &w, const t_instantiation_context &ictx, t_vio_dependencies& _always_dependencies, t_vio_ff_usage &_ff_usage, t_vio_dependencies &_post_dependencies) const;
+    /// \brief writes all FSM states in the output
+    void writeCombinationalStates(const t_fsm_nfo *fsm, std::string prefix, t_writer_context &w, const t_instantiation_context &ictx, const t_vio_dependencies &always_dependencies, t_vio_ff_usage &_ff_usage, t_vio_dependencies &_post_dependencies) const;
+    /// \brief disable starting pipelines (used to disable pipeline first stages when they are on the 'false' side of a conditional)
+    void disableStartingPipelines(std::string prefix, t_writer_context &w, const t_instantiation_context &ictx, const t_combinational_block* block) const;
     /// \brief writes a graph of stateless blocks to the output, until a jump to other states is reached
-    void writeStatelessBlockGraph(std::string prefix, std::ostream& out, const t_instantiation_context &ictx, const t_combinational_block* block, const t_combinational_block* stop_at, std::queue<size_t>& _q, t_vio_dependencies& _dependencies, t_vio_ff_usage &_ff_usage, t_vio_dependencies &_post_dependencies, std::set<v2i> &_lines) const;
+    void writeStatelessBlockGraph(std::string prefix, t_writer_context &w, const t_instantiation_context &ictx, const t_combinational_block* block, const t_combinational_block* stop_at, std::queue<size_t>& _q, t_vio_dependencies& _dependencies, t_vio_ff_usage &_ff_usage, t_vio_dependencies &_post_dependencies, t_lines_nfo& _lines) const;
+    /// \brief order pipeline stages based on pipeline specific assignments
+    bool orderPipelineStages(std::vector< t_pipeline_stage_range >& _stages) const;
     /// \brief writes a stateless pipeline to the output, returns zhere to resume from
-    const t_combinational_block *writeStatelessPipeline(std::string prefix, std::ostream& out, const t_instantiation_context &ictx, const t_combinational_block* block_before, std::queue<size_t>& _q, t_vio_dependencies& _dependencies, t_vio_ff_usage &_ff_usage, t_vio_dependencies &_post_dependencies, std::set<v2i> &_lines) const;
+    const t_combinational_block *writeStatelessPipeline(std::string prefix, t_writer_context &w, const t_instantiation_context &ictx, const t_combinational_block* block_before, std::queue<size_t>& _q, t_vio_dependencies& _dependencies, t_vio_ff_usage &_ff_usage, t_vio_dependencies &_post_dependencies, t_lines_nfo& _lines) const;
+    /// \brief returns whether the combinational chain until next state is empty, i.e. it will not produce code
+    bool emptyUntilNextStates(const t_combinational_block *block) const;
+    /// \brief returns all pipelines starting within the combinational chain
+    void findAllStartingPipelines(const t_combinational_block *block,std::unordered_set<t_pipeline_nfo*>& _pipelines) const;
+    /// \brief returns whether the block is empty, i.e. writeBlock will not produce code
+    bool blockIsEmpty(const t_combinational_block *block) const;
     /// \brief writes a single block to the output
-    void writeBlock(std::string prefix, std::ostream &out, const t_instantiation_context &ictx, const t_combinational_block *block, t_vio_dependencies &_dependencies, t_vio_ff_usage &_ff_usage, std::set<v2i>& _lines) const;
+    void writeBlock(std::string prefix, t_writer_context &w, const t_instantiation_context &ictx, const t_combinational_block *block, t_vio_dependencies &_dependencies, t_vio_ff_usage &_ff_usage, t_lines_nfo& _lines) const;
     /// \brief writes variable inits
     void writeVarInits(std::string prefix, std::ostream& out, const t_instantiation_context &ictx, const std::unordered_map<std::string, int >& varnames, t_vio_dependencies& _dependencies, t_vio_ff_usage &_ff_usage) const;
     /// \brief writes a memory module
@@ -1048,8 +1215,16 @@ private:
     std::string memoryModuleName(std::string instance_name, const t_mem_nfo &bram) const;
     /// \brief prepare replacements for a memory module template
     void prepareModuleMemoryTemplateReplacements(std::string instance_name, const t_mem_nfo& bram, std::unordered_map<std::string, std::string>& _replacements) const;
+    /// \brief checks whether a var is in the instantiation context
+    bool varIsInInstantiationContext(std::string var, const t_instantiation_context& ictx) const;
+    /// \brief adds a vio from an algorithm to an instantiation context
+    void addToInstantiationContext(const Algorithm *alg,std::string var, const t_var_nfo& bnfo, const t_instantiation_context& ictx, t_instantiation_context& _local_ictx) const;
+    /// \brief makes an instantiation context for a blueprint
+    void makeBlueprintInstantiationContext(const t_instanced_nfo& nfo, const t_instantiation_context& ictx, t_instantiation_context& _local_ictx) const;
+    /// \brief write instanciated blueprints
+    void writeInstanciatedBlueprints(std::ostream& out, const t_instantiation_context& ictx, bool first_pass);
     /// \brief writes the algorithm as a Verilog module, calls the version above twice in a two pass optimization process
-    void writeAsModule(std::ostream &out, const t_instantiation_context& ictx, t_vio_ff_usage &_ff_usage, bool do_lint) const;
+    void writeAsModule(std::ostream& out, const t_instantiation_context& ictx, t_vio_ff_usage &_ff_usage, bool do_lint) const;
     /// \brief outputs a report on the VIOs in the algorithm
     void outputVIOReport(const t_instantiation_context &ictx) const;
 
@@ -1058,31 +1233,24 @@ private:
     /// \brief asks reports to be generated
     void enableReporting(std::string reportname);
 
-    /// \brief outputs the FSM graph in a file (graphviz dot format)
-    void outputFSMGraph(std::string dotFile) const;
-
     /// \brief ExpressionLinter is a friend
     friend class ExpressionLinter;
 
-    /// \brief return the algorithm name
-    std::string name() const { return m_Name; }
-  
     /// \brief set the pre-processor
     static void setLuaPreProcessor(LuaPreProcessor *lpp)
     {
       s_LuaPreProcessor = lpp;
     }
 
-    /// \brief writes the algorithm as the top-most Verilog module, recurses through instanced blueprints
-    void writeAsModule(std::string top_instance_name, std::ostream &out);
-    /// \brief same as above, with a pre-existing instantiation context (used for exports)
-    void writeAsModule(std::string top_instance_name, std::ostream &out, const t_instantiation_context &pre_ictx);
-
     /// \brief check whether an algorithm is used for formal verification or not
     bool isFormal() { return m_hasHash; }
 
     /// === implements Blueprint
 
+    /// \brief returns the blueprint name
+    std::string name() const override { return m_Name; }
+    /// \brief sets as a top module in the output stream
+    void setAsTopMost() override;
     /// \brief writes the algorithm as a Verilog module, recurses through instanced blueprints
     void writeAsModule(std::ostream& out, const t_instantiation_context& ictx, bool first_pass);
     /// \brief inputs
@@ -1106,7 +1274,7 @@ private:
     /// \brief returns true if the blueprint requires a clock
     bool requiresClock() const override { return true; }
     /// \brief determines vio bit width and (if applicable) table size
-    std::tuple<t_type_nfo, int> determineVIOTypeWidthAndTableSize(std::string vname, antlr4::misc::Interval interval, int line) const override;
+    std::tuple<t_type_nfo, int> determineVIOTypeWidthAndTableSize(std::string vname, const Utils::t_source_loc& srcloc) const override;
     /// \brief returns the name of an input port from its internal name
     std::string inputPortName(std::string name)  const override { return std::string(ALG_INPUT) + '_' + name; }
     /// \brief returns the name of an output port from its internal name
@@ -1114,7 +1282,7 @@ private:
     /// \brief returns the name of an inout port from its internal name
     std::string inoutPortName(std::string name)  const override { return std::string(ALG_INOUT) + '_' + name; }
     /// \brief returns the name of the module
-    std::string moduleName(std::string blueprint_name, std::string instance_name) const override { return "M_" + blueprint_name + '_' + instance_name; }
+    std::string moduleName(std::string blueprint_name, std::string instance_name) const override { return "M_" + blueprint_name + (instance_name.empty()?"":('_' + instance_name)); }
     /// \brief returns true of the 'combinational' boolean is properly setup for outputs
     bool hasOutputCombinationalInfo() const override { return true; }
 

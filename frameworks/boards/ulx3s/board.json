@@ -6,17 +6,21 @@
       "framework" : "ulx3s.v",
       "pins": [
         {"set"    : "basic"},
-        {"set"    : "buttons","define" : "BUTTONS=1"},
-        {"set"    : "vga",    "define" : "VGA=1"},
-        {"set"    : "oled",   "define" : "OLED=1"},
-        {"set"    : "sdram",  "define" : "SDRAM=1"},
-        {"set"    : "sdcard", "define" : "SDCARD=1"},
-        {"set"    : "hdmi",   "define" : "HDMI=1"},
-        {"set"    : "gpio",   "define" : "GPIO=1"},
-        {"set"    : "audio",  "define" : "AUDIO=1"},
-        {"set"    : "uart",   "define" : "UART=1"},
-        {"set"    : "uart2",  "define" : "UART2=1"},
-        {"set"    : "us2_ps2","define" : "US2_PS2=1"}
+        {"set"    : "buttons", "define" : "BUTTONS=1"},
+        {"set"    : "vga",     "define" : "VGA=1"},
+        {"set"    : "oled",    "define" : "OLED=1"},
+        {"set"    : "sdram",   "define" : "SDRAM=1"},
+        {"set"    : "sdcard",  "define" : "SDCARD=1"},
+        {"set"    : "hdmi",    "define" : "HDMI=1"},
+        {"set"    : "gpio",    "define" : "GPIO=1"},
+        {"set"    : "audio",   "define" : "AUDIO=1"},
+        {"set"    : "uart",    "define" : "UART=1"},
+        {"set"    : "uart2",   "define" : "UART2=1"},
+        {"set"    : "spiflash","define" : "SPIFLASH=1"},
+        {"set"    : "qspiflash", "define" : "QSPIFLASH=1"},
+        {"set"    : "us2_ps2", "define" : "US2_PS2=1"},
+        {"set"    : "i2c",     "define" : "I2C=1"},
+        {"set"    : "pmod_qqspi", "define" : "PMOD_QQSPI=1"}
       ],
       "builders": [
       {
@@ -25,7 +29,7 @@
         "tool": "trellis",
         "tool_options": [
           {
-              "yosys_synth_options": ["-abc9"],
+              "yosys_synth_options": ["-abc9 -top top"],
               "nextpnr_options": ["--85k", "--freq 25", "--package CABGA381", "--timing-allow-fail"],
               "pnr": "next"
           }
@@ -33,6 +37,17 @@
         "bitstream"  : "build.bit",
         "constraints": [{"name": "ulx3s.lpf", "file_type": "LPF"}],
         "program": [{"cmd" : "openFPGALoader", "args" : "-b ulx3s build.bit"}]
+      },
+      {
+        "builder" : "edalize",
+        "description": "Build using Edalize and Diamond",
+        "tool": "diamond",
+        "tool_options": [{
+          "part": "LFE5U-85F-6BG381C"
+        }],
+        "bitstream"  : "build.bit",
+        "constraints": [{"name": "ulx3s.lpf", "file_type": "LPF"}],
+        "program": [{"cmd" : "openFPGAloader", "args" : " -b ulx3s ./Implementation0/build_Implementation0.bit"}]
       },
       {
         "builder" : "shell",
@@ -56,7 +71,8 @@
         {"set"    : "audio",  "define" : "AUDIO=1"},
         {"set"    : "uart",   "define" : "UART=1"},
         {"set"    : "uart2",  "define" : "UART2=1"},
-        {"set"    : "us2_ps2","define" : "US2_PS2=1"}
+        {"set"    : "us2_ps2","define" : "US2_PS2=1"},
+        {"set"    : "i2c",    "define" : "I2C=1"}
       ],
       "builders": [
       {
@@ -96,7 +112,8 @@
         {"set"    : "audio",  "define" : "AUDIO=1"},
         {"set"    : "uart",   "define" : "UART=1"},
         {"set"    : "uart2",  "define" : "UART2=1"},
-        {"set"    : "us2_ps2","define" : "US2_PS2=1"}
+        {"set"    : "us2_ps2","define" : "US2_PS2=1"},
+        {"set"    : "i2c",    "define" : "I2C=1"}
       ],
       "builders": [
       {
@@ -136,7 +153,8 @@
         {"set"    : "audio",  "define" : "AUDIO=1"},
         {"set"    : "uart",   "define" : "UART=1"},
         {"set"    : "uart2",  "define" : "UART2=1"},
-        {"set"    : "us2_ps2","define" : "US2_PS2=1"}
+        {"set"    : "us2_ps2","define" : "US2_PS2=1"},
+        {"set"    : "i2c",    "define" : "I2C=1"}
       ],
       "builders": [
       {
@@ -161,221 +179,5 @@
       }
       ]
     }
-  ],
-  "pins": {
-    "basic": [
-      {
-        "name": "leds",
-        "type": "uint8",
-        "io": "output"
-      }
-    ],
-    "buttons" : [
-      {
-        "name": "btns",
-        "type": "uint7",
-        "io": "input"
-      }
-    ],
-    "audio" : [
-      {
-        "name": "audio_l",
-        "type": "uint4",
-        "io": "output"
-      },
-      {
-        "name": "audio_r",
-        "type": "uint4",
-        "io": "output"
-      }
-    ],
-    "oled": [
-      {
-        "name": "oled_clk",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_mosi",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_dc",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_resn",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_csn",
-        "type": "uint1",
-        "io": "output"
-      }
-    ],
-    "sdcard": [
-      {
-        "name": "sd_csn",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sd_clk",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sd_mosi",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sd_miso",
-        "type": "uint1",
-        "io": "input"
-      }
-    ],
-    "sdram": [
-      {
-        "name": "sdram_dq",
-        "type": "uint16",
-        "io": "inout"
-      },
-      {
-        "name": "sdram_clk",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sdram_cle",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sdram_dqm",
-        "type": "uint2",
-        "io": "output"
-      },
-      {
-        "name": "sdram_cs",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sdram_we",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sdram_cas",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sdram_ras",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sdram_ba",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "sdram_a",
-        "type": "uint1",
-        "io": "output"
-      }
-    ],
-    "hdmi": [
-      {
-        "name": "gpdi_dp",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "gpdi_dn",
-        "type": "uint1",
-        "io": "output"
-      }
-    ],
-    "gpio": [
-      {
-        "name": "gp",
-        "type": "uint28",
-        "io": "inout"
-      },
-      {
-        "name": "gn",
-        "type": "uint28",
-        "io": "inout"
-      }
-    ],
-    "uart": [
-      {
-        "name": "uart_tx",
-        "type": "uint1",
-        "io"  : "output"
-      },
-      {
-        "name": "uart_rx",
-        "type": "uint1",
-        "io"  : "input"
-      }
-    ],
-    "uart2": [
-      {
-        "name": "uart2_tx",
-        "type": "uint1",
-        "io"  : "output"
-      },
-      {
-        "name": "uart2_rx",
-        "type": "uint1",
-        "io"  : "input"
-      }
-    ],
-    "us2_ps2": [
-      {
-        "name": "us2_bd_dp",
-        "type": "uint1",
-        "io"  : "input"
-      },
-      {
-        "name": "us2_bd_dn",
-        "type": "uint1",
-        "io"  : "input"
-      }
-    ],
-    "vga": [
-      {
-        "name": "vga_hs",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "vga_vs",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "vga_r",
-        "type": "uint6",
-        "io": "output"
-      },
-      {
-        "name": "vga_g",
-        "type": "uint6",
-        "io": "output"
-      },
-      {
-        "name": "vga_b",
-        "type": "uint6",
-        "io": "output"
-      }
-    ]
-  }
+  ]
 }

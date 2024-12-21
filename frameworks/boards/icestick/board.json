@@ -4,14 +4,16 @@
     {
       "name"      : "configurable",
       "framework" : "icestick.v",
-      "pins"      : [ 
+      "pins"      : [
         {"set"    : "basic"},
         {"set"    : "vga",  "define" : "VGA=1"},
         {"set"    : "oled", "define" : "OLED=1"},
         {"set"    : "pmod", "define" : "PMOD=1"},
         {"set"    : "pmod_out", "define" : "PMOD_OUT=1"},
         {"set"    : "uart",   "define" : "UART=1"},
-				{"set"    : "spiflash", "define" : "SPIFLASH=1"}
+				{"set"    : "spiflash", "define" : "SPIFLASH=1"},
+				{"set"    : "spiscreen_extra", "define" : "SPISCREEN_EXTRA=1"},
+        {"set"    : "pmod_qqspi", "define" : "PMOD_QQSPI=1"}
       ],
       "builders": [
         {
@@ -20,7 +22,7 @@
           "tool": "icestorm",
           "tool_options": [
             {
-                "yosys_synth_options": ["-abc9","-relut"],
+                "yosys_synth_options": ["-abc9","-relut","-top top"],
                 "nextpnr_options": ["--force", "--hx1k", "--freq 12", "--package tq144", "--timing-allow-fail"],
                 "pnr": "next"
             }
@@ -34,118 +36,7 @@
           "command" : "icestick.sh",
           "description": "Custom shell scripts using yosys and nextpnr"
         }
-      ]    
+      ]
     }
-  ],
-  "pins": {
-    "basic": [
-      {
-        "name": "leds",
-        "type": "uint5",
-        "io": "output"
-      }
-    ],
-    "oled": [
-      {
-        "name": "oled_clk",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_mosi",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_csn",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_resn",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_dc",
-        "type": "uint1",
-        "io": "output"
-      }
-    ],
-    "vga": [
-      {
-        "name": "vga_hs",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "vga_vs",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "vga_r",
-        "type": "uint6",
-        "io": "output"
-      },
-      {
-        "name": "vga_g",
-        "type": "uint6",
-        "io": "output"
-      },
-      {
-        "name": "vga_b",
-        "type": "uint6",
-        "io": "output"
-      }
-    ],
-    "pmod": [
-      {
-        "name": "pmod",
-        "type": "uint8",
-        "io"  : "input_output"
-      }
-    ],
-    "pmod_out": [
-      {
-        "name": "pmod",
-        "type": "uint8",
-        "io"  : "output"
-      }
-    ],
-    "uart": [
-      {
-        "name": "uart_tx",
-        "type": "uint1",
-        "io"  : "output"
-      },
-      {
-        "name": "uart_rx",
-        "type": "uint1",
-        "io"  : "input"
-      }
-    ],
-    "spiflash": [
-      {
-        "name" : "sf_clk",
-        "type" : "uint1",
-        "io"   : "output"
-      },
-      {
-        "name" : "sf_csn",
-        "type" : "uint1",
-        "io"   : "output"
-      },
-      {
-        "name" : "sf_mosi",
-        "type" : "uint1",
-        "io"   : "output"
-      },
-      {
-        "name" : "sf_miso",
-        "type" : "uint1",
-        "io"   : "input"
-      }      
-    ]		
-  }
+  ]
 }

@@ -1,0 +1,16 @@
+
+algorithm main(output uint8 leds)
+{
+
+  uint16 val        = 231;
+  uint16 reciprocal = 16h199A;
+  uint32 tmp = 0;
+  uint16 res = 0;
+
+  tmp = val * reciprocal;
+
+  res = (tmp >> 16);
+
+  __display("result = %d",res);
+
+}

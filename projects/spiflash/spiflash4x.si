@@ -1,0 +1,278 @@
+// @sylefeb 2021
+// MIT license, see LICENSE_MIT in Silice repo root
+// https://github.com/sylefeb/Silice
+//
+// ========================================================
+// IMPORTANT: on the ice40, use icepack -s
+// ========================================================
+//
+// 4x version (quad SPI at 2x clock)
+//
+// Highly recommanded watch on timing analysis for SPIflash on ice40:
+//   https://www.youtube.com/watch?v=mitAhMOt3zI&t=1400s
+//
+// For a (more stable/reliable) Verilog SPIflash 100MHz
+// controller also see smunaut (@tnt) repos:
+//   https://github.com/no2fpga/no2qpimem/blob/master/rtl/qpi_phy_ice40_4x.v
+
+import('ddr_clock.v')
+
+$$if VERILATOR then
+import('../common/verilator_data.v') // this is a feature supported by Silice
+                                     // verilator framework to access raw data
+                                     // stored in a 'data.raw' file
+$$end
+
+$$local ICE40
+$$if ICEBREAKER or ICEBITSY or FOMU then
+$$ ICE40 = 1
+import('../common/ice40_sb_io_inout.v')
+import('../common/ice40_sb_io.v')
+$$end
+
+$$if not ICE40 and not SIMULATION then
+$$error('The SPIflash x4 controller is currently only for the ice40 FPGA\n'
+$$    ..'It should be possible to port it to other FPGAs with some efforts.')
+$$end
+
+$$if not nBytes then
+$$ nBytes = 1
+$$else
+$$  if nBytes ~= 1 and nBytes ~= 4 then
+$$    error('The SPIflash x4 controller can only be configures for 1 or 4 bytes reads.')
+$$  end
+$$end
+
+algorithm spiflash_qspi(
+  input  uint16 send,
+  input  uint4  trigger,
+  input  uint4  send_else_read,
+  input  uint1  qspi,
+$$if nBytes == 4 then
+  output uint32 read,
+$$else
+  output uint8  read,
+$$end
+  output uint1  clk,  output uint1  csn,
+  inout  uint1  io0,  inout  uint1  io1,
+  inout  uint1  io2,  inout  uint1  io3,
+) {
+  uint1  dc(0);
+  uint16 sending(0);
+  uint4  trig(0);
+  uint4  ser(0);
+  uint4  osc(4b0001);
+  uint2  keep_reading(0);
+  uint4  delay_i(0);
+
+  uint1  enable(0);
+  ddr_clock ddr(clock <: clock, enable <:: enable, ddr_clock :> clk);
+
+$$if not ICE40 then
+  // NOTE: This is used for simulation ; it is somewhat convoluted
+  // so as to simulated registered IO delays. Works best with Icarus and
+  // vendor model, see stream.si in projects/spiflash
+  uint1 d_csn(1);
+  always {
+    // output enable on ios
+    io0.oenable  = ser[3,1];
+    io1.oenable  = ser[3,1];
+    io2.oenable  = ser[3,1];
+    io3.oenable  = ser[3,1];
+    // read current
+    read         = keep_reading[0,1] ? {delay_i,read[4,$nBytes*8 - 4$]} : read;
+    delay_i      = {io3.i,io2.i,io1.i,io0.i};
+    // update outputs
+    io0.o        = sending[12,1];  io1.o = sending[13,1];
+    io2.o        = sending[14,1];  io3.o = sending[15,1];
+    // start/keep sending?
+    keep_reading = enable ? 2b11 : (keep_reading>>1);
+    sending      = osc[3,1] ? send           : (sending << 4);
+    trig         = osc[3,1] ? trigger        : (trig<<1);
+    ser          = osc[3,1] ? send_else_read : (ser <<1);
+    osc          = {osc[0,3],osc[3,1]};
+    enable       = trig[3,1];
+    csn          = d_csn;
+    d_csn        = ~enable;
+  }
+$$else
+  // setup registered tristate ios
+  uint4 io_oe(0); uint4 io_i(0); uint4 io_o(0);
+  sb_io_inout _(clock <: clock, oe <: io_oe[0,1], in :> io_i[0,1], out <: io_o[0,1], pin <:> io0);
+  sb_io_inout _(clock <: clock, oe <: io_oe[1,1], in :> io_i[1,1], out <: io_o[1,1], pin <:> io1);
+  sb_io_inout _(clock <: clock, oe <: io_oe[2,1], in :> io_i[2,1], out <: io_o[2,1], pin <:> io2);
+  sb_io_inout _(clock <: clock, oe <: io_oe[3,1], in :> io_i[3,1], out <: io_o[3,1], pin <:> io3);
+  uint1 nenable <:: ~ enable;
+  sb_io       _(clock <: clock, out <: nenable, pin :> csn);
+  always {
+    // output enable on ios
+    io_oe        = {4{ser[3,1]}};
+    // read current
+    read         = keep_reading[0,1] ? {io_i,read[4,$nBytes*8 - 4$]} : read;
+    //                                  ^^^^ delay_i (see below)
+    // delay_i      = io_i; // NOTE: @50 MHz the delay has to be there but not at
+    //_                              @100 MHz ; seems due to a timing failure (!)
+    //                               the delay is built in routing ... hmmm ...
+    // update outputs
+    io_o         = sending[12,4];
+    // start/keep sending?
+    keep_reading = enable ? 2b11 : (keep_reading>>1);
+    sending      = osc[3,1] ? send           : (sending << 4);
+    trig         = osc[3,1] ? trigger        : (trig<<1);
+    ser          = osc[3,1] ? send_else_read : (ser <<1);
+    osc          = {osc[0,3],osc[3,1]};
+    enable       = trig[3,1];
+  }
+$$end
+}
+
+// -------------------------------------------------------------
+
+algorithm spiflash_rom(
+  input   uint1  in_ready,
+  input   uint24 addr,
+  output  uint$nBytes*8$ rdata,
+  output  uint1  busy(1),
+  // QSPI flash
+  output  uint1  sf_csn(1),
+  output  uint1  sf_clk,
+  inout   uint1  sf_io0,
+  inout   uint1  sf_io1,
+  inout   uint1  sf_io2,
+  inout   uint1  sf_io3,
+  // double clock
+  input   uint1  clkspi
+) <autorun> {
+
+  spiflash_qspi spiflash<@clkspi>(
+    clk     :> sf_clk,
+    csn     :> sf_csn,
+    io0    <:> sf_io0,
+    io1    <:> sf_io1,
+    io2    <:> sf_io2,
+    io3    <:> sf_io3,
+  );
+
+  uint48 sendvec(0);
+  uint20 send_read(0);
+  uint20 trigger(0);
+  uint11 wait(0);
+  uint7  working(0);
+  uint2  init(2b11);
+  uint1  accept_in <:: wait[10,1] & ~working[0,1];
+$$if SIMULATION then
+  uint32 cycle(0);
+$$end
+$$if VERILATOR then
+  uint4  vfetch(0);
+$$if VERILATOR then
+  verilator_data vdta(clock <: clock);
+$$end
+$$end
+  always {
+
+    if (~wait[10,1]) {
+$$if ICARUS then
+        // this is necessary for icarus as spiflash.qspi is otherwise 1bz
+        if (reset) { spiflash.trigger = 0; spiflash.send = 0; }
+$$end
+        wait      = wait + 1;
+    }
+
+    if (~working[1,1] & working[0,1]) { // last
+      // verilator simulation bypasses spi4x phy
+$$if not VERILATOR then
+      // read from phy
+$$if nBytes == 1 then
+      rdata                   = {spiflash.read[0,4],spiflash.read[4,4]};
+$$else
+      rdata                   = {spiflash.read[24,4],spiflash.read[28,4],
+                                 spiflash.read[16,4],spiflash.read[20,4],
+                                 spiflash.read[ 8,4],spiflash.read[12,4],
+                                 spiflash.read[ 0,4],spiflash.read[ 4,4]
+                                };
+$$end
+$$end
+$$if ICARUS then
+      // icarus specific
+      init                    = reset ? 2b11 : (init >> 1);
+$$else
+      init                    = init >> 1;
+$$end
+      // done
+$$if SIMULATION then
+      //__display("[%d] spiflash DONE (%h)",cycle,spiflash.read);
+$$end
+    } // working[0,1]
+
+    // verilator bypass
+$$if VERILATOR then
+$$if nBytes == 1 then
+    rdata     = vfetch[0,1] ? vdta.data : rdata;
+$$else
+    rdata     = vfetch[0,1] ? {vdta.data,rdata[8,24]} : rdata;
+$$end
+    vdta.addr = vfetch[0,1] ? vdta.addr + 1 : vdta.addr;
+    vfetch    = vfetch >> 1;
+$$end
+
+    // move working
+    working                 = working >> 1;
+    // move sendvec
+    spiflash.send           = sendvec[32,16];
+    sendvec                 = sendvec << 16;
+    // move trigger
+    spiflash.trigger        = trigger[16,4];
+    trigger                 = trigger << 4;
+    // move send or read
+    spiflash.send_else_read = send_read[16,4];
+    send_read               = send_read << 4;
+
+    // start sending?
+    if ((in_ready | init[0,1]) & accept_in) {
+$$if nBytes == 4 then
+      working   = 7b0111111;
+      sendvec   = init[1,1] ? {32b00000000000100010001000000000000,8h00,8h00} // 38h
+                : init[0,1] ? {8hEB,24h0,8b00100000,8h00}
+                            : {addr,8b00100000,16h00};
+      trigger   = init[1,1] ? {20b11111111000000000000}
+                : init[0,1] ? {20b11111111111111111100}
+                            : {20b11111111111111110000};
+      send_read = init[1,1] ? {20b11111111111111110000}
+                : init[0,1] ? {20b11111111110000000000}
+                            : {20b11111111000000000000};
+$$else
+      working   = 7b0001111;
+      sendvec   = init[1,1] ? {32b00000000000100010001000000000000,8h00,8h00} // 38h
+                : init[0,1] ? {8hEB,24h0,8b00100000,8h00}
+                            : {addr,8b00100000,16h00};
+      trigger   = init[1,1] ? {20b11111111000000000000}
+                : init[0,1] ? {20b11111111111100000000}
+                            : {20b11111111110000000000};
+      send_read = init[1,1] ? {20b11111111111111110000}
+                : init[0,1] ? {20b11111111110000000000}
+                            : {20b11111111000000000000};
+$$end
+
+$$if SIMULATION then
+      //__display("[%d] spiflash START (@%h)",cycle,addr);
+$$end
+$$if VERILATOR then
+      vdta.addr = addr;
+$$if nBytes == 4 then
+      vfetch    = 4b1111;
+$$else
+      vfetch    = 4b0001;
+$$end
+$$end
+    }
+
+    busy  = init[0,1] | working[0,1];
+
+$$if SIMULATION then
+    cycle = cycle + 1;
+$$end
+  }
+}
+
+// -------------------------------------------------------------

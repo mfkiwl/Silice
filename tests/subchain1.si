@@ -1,0 +1,19 @@
+algorithm main(output uint8 leds)
+{
+
+  subroutine inc(input uint8 a,output uint8 r)
+  {
+    r = a;
+  }
+
+  subroutine foo(input uint8 a,output uint8 r)
+  {
+    r = a;
+  }
+
+  uint8 v = 0;
+
+  (v) <- inc <- (v);
+  (v) <- foo <- (v);
+
+}

@@ -27,65 +27,69 @@ this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "siliceLexer.h"
 #include "siliceParser.h"
 
+#include <LibSL.h>
+
 namespace Silice
 {
   class LuaPreProcessor;
+  class ParsingContext;
 
   namespace Utils
   {
 
     // -------------------------------------------------
 
-    /// \brief return next higher power of two covering n
-    int  justHigherPow2(int n);
-    /// \brief report an error using token or line number
-    void reportError(antlr4::Token *what, int line, const char *msg, ...);
-    /// \brief report an error using source interval or line number
-    void reportError(antlr4::misc::Interval interval, int line, const char *msg, ...);
-    /// \brief types of warnings
-    enum e_WarningType { Standard, Deprecation };
-    /// \brief issues a warning
-    void warn(e_WarningType type, antlr4::misc::Interval interval, int line, const char *msg, ...);
-    /// \brief get a token from a source interval (helper)
-    antlr4::Token *getToken(antlr4::misc::Interval interval, bool last_else_first = false);
-    /// \brief returns the source file and line for the given token (helper)
-    std::pair<std::string, int> getTokenSourceFileAndLine(antlr4::Token *tk);
-    /// \brief Token stream for warning reporting, optionally set
-    static antlr4::TokenStream *s_TokenStream;
-    /// \brief Pre-processor, optionally set
-    static LuaPreProcessor *s_LuaPreProcessor;
-    /// \brief set the token stream
-    void setTokenStream(antlr4::TokenStream *tks);
-    /// \brief set the pre-processor
-    void setLuaPreProcessor(LuaPreProcessor *lpp);
-    /// \brief extracts a piece of source code in between given tokens
-    std::string extractCodeBetweenTokens(std::string file, int stk, int etk);
-    /// \brief loads the content of file into a string
-    std::string fileToString(const char* file);
+    /// \brief source location for error reporting
+    typedef struct s_source_loc  {
+      antlr4::misc::Interval    interval = antlr4::misc::Interval::INVALID; // block source interval
+      antlr4::tree::ParseTree  *root = nullptr; // root of the parse tree where the var is declared
+    } t_source_loc;
+
+    static t_source_loc nowhere;
 
     // -------------------------------------------------
 
-    class LanguageError
-    {
-    public:
-      enum { e_MessageBufferSize = 4096 };
-    private:
-      int            m_Line = -1;
-      antlr4::Token *m_Token = nullptr;
-      antlr4::misc::Interval  m_Interval;
-      char           m_Message[e_MessageBufferSize];
-      LanguageError() { m_Message[0] = '\0'; }
-    public:
-      LanguageError(int line, antlr4::Token *tk, antlr4::misc::Interval interval, const char *msg, ...)
-#if !defined(_WIN32) && !defined(_WIN64)
-        __attribute__((format(printf, 5, 6)))
-#endif
-      ;
-      int line() const { return m_Line; }
-      const char *message()  const { return (m_Message); }
-      antlr4::Token *token() { return m_Token; }
-      antlr4::misc::Interval  interval() { return m_Interval; }
-    };
+    /// \brief return next higher power of two covering n
+    int  justHigherPow2(int n);
+    /// \brief report an error using source tree node
+    void reportError(const t_source_loc& srcloc, const char *msg, ...);
+    /// \brief types of warnings
+    enum e_WarningType { Standard, Deprecation };
+    /// \brief issues a warning
+    void warn(e_WarningType type, const t_source_loc& srcloc, const char *msg, ...);
+    /// \brief get a token from a source interval (helper)
+    antlr4::Token *getToken(antlr4::tree::ParseTree *node, antlr4::misc::Interval interval, bool last_else_first = false);
+    /// \brief returns the source file and line for the given token (helper)
+    std::pair<std::string, int> getTokenSourceFileAndLine(antlr4::tree::ParseTree *node, antlr4::Token *tk);
+    /// \brief return the lines covered by an instruction
+    std::pair<std::string,v2i> instructionLines(antlr4::tree::ParseTree* instr);
+    /// \brief return the lines covered by a token
+    std::pair<std::string, v2i> tokenLines(antlr4::tree::ParseTree *tree, antlr4::Token *tk);
+    /// \brief return the source file of a source locator
+    std::string sourceFile(const t_source_loc& srcloc);
+    /// \brief returns a line in source code from an interval
+    int lineFromInterval(antlr4::TokenStream *tk_stream, antlr4::misc::Interval interval);
+    /// \brief extracts a piece of source code around a given token
+    std::string extractCodeAroundToken(std::string file, antlr4::Token* tk, antlr4::TokenStream* tk_stream, int& _offset);
+    /// \brief extracts a piece of source code in between given tokens
+    std::string extractCodeBetweenTokens(std::string file, antlr4::TokenStream* tk_stream, int stk, int etk);
+    /// \brief fills in file name and code exerpt (code and positions) from token stream and offending token or interval
+    void getSourceInfo(antlr4::TokenStream* tk_stream, antlr4::Token* offender, antlr4::misc::Interval interval, std::string& _file, std::string& _code, int& _first, int& _last);
+    /// \brief loads the content of file into a string
+    std::string fileToString(const char* file);
+    /// \brief returns a temporary filename (within temporary directory)
+    std::string tempFileName();
+    /// \brief splits a string with a delimiter
+    void split(const std::string& s, char delim, std::vector<std::string>& elems);
+    /// \brief returns the number of lines in string l
+    int  numLinesIn(std::string l);
+    /// \brief go up to the root
+    antlr4::tree::ParseTree *root(antlr4::tree::ParseTree *node);
+    /// \brief build a source localizer
+    t_source_loc sourceloc(antlr4::tree::ParseTree *node);
+    t_source_loc sourceloc(antlr4::tree::ParseTree *root, antlr4::misc::Interval interval);
+
+    // -------------------------------------------------
 
   };
 

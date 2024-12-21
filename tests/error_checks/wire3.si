@@ -1,0 +1,14 @@
+algorithm main(output uint8 leds)
+{
+  uint8 a = 1;
+  uint8 b = 2;
+
+  a = 3;
+  b = 5;
+
+++:
+
+  uint9 a_plus_b <: w + b;
+  a = a_plus_b;
+
+}

@@ -32,15 +32,20 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <mutex>
 #include <thread>
 
+#ifdef __APPLE__
+#include <OpenGL/gl.h>
+#include <GLFW/glfw3.h>
+#else
 #include <GL/gl.h>
-#include <GL/glut.h>
+#include <GLFW/glfw3.h>
+#endif
 
 // ----------------------------------------------------------------------------
 
 // external definitions
 static DisplayChip *g_Chip = nullptr;
 
-void step();
+int step();
 
 // ----------------------------------------------------------------------------
 
@@ -49,15 +54,49 @@ std::mutex g_Mutex;         // Mutex to lock the chip during rendering
 
 // ----------------------------------------------------------------------------
 
+void refresh()
+{
+  glTexSubImage2D( GL_TEXTURE_2D,0,0,0,
+                g_Chip->framebuffer().w(),g_Chip->framebuffer().h(),
+                GL_RGBA,GL_UNSIGNED_BYTE,
+                g_Chip->framebuffer().pixels().raw());
+  glBegin(GL_QUADS);
+  glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, 0.0f);
+  glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, 0.0f);
+  glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, 1.0f);
+  glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f, 1.0f);
+  glEnd();
+}
+
+// ----------------------------------------------------------------------------
+
 void simul()
 {
+#ifdef TRACE_FST
+  // open trace
+  VerilatedFstC *trace = new VerilatedFstC();
+  Verilated::traceEverOn(true);
+  bare_test->trace(trace, std::numeric_limits<int>::max());
+  trace->open("trace.fst");
+  int timestamp = 0;
+#endif
   // thread running the simulation forever
-  while (1) {
+  int keep_going = 1;
+  while (keep_going) {
     // lock for safe concurrent use between drawer and simulation
     std::lock_guard<std::mutex> lock(g_Mutex);
     // step
-    step();
+    keep_going = step();
+    #ifdef TRACE_FST
+    // update trace
+    trace->dump(timestamp++);
+    #endif
   }
+#ifdef TRACE_FST
+  // close trace
+  trace->close();
+#endif
+
 }
 
 // ----------------------------------------------------------------------------
@@ -67,23 +106,10 @@ void render()
   // lock the mutex before accessing g_Chip
   std::lock_guard<std::mutex> lock(g_Mutex);
   // has the framebuffer changed?
-  if (g_Chip->framebufferChanged()) {
-    // yes: refresh frame
-    glTexSubImage2D( GL_TEXTURE_2D,0,0,0,
-                  g_Chip->framebuffer().w(),g_Chip->framebuffer().h(),
-                  GL_RGBA,GL_UNSIGNED_BYTE,
-                  g_Chip->framebuffer().pixels().raw());
-    glBegin(GL_QUADS);
-    glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, 0.0f);
-    glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, 0.0f);
-    glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, 1.0f);
-    glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f, 1.0f);
-    glEnd();
-    // swap buffers
-    glutSwapBuffers();
-  }
-  // ask glut to immediately redraw
-  glutPostRedisplay();
+  //if (g_Chip->framebufferChanged()) {
+  // yes: refresh frame
+  refresh();
+  //}
 }
 
 // ----------------------------------------------------------------------------
@@ -91,20 +117,23 @@ void render()
 void display_loop(DisplayChip *chip)
 {
   g_Chip = chip;
-  // glut window
-  int   argc=0;
-  char *argv[1] = {NULL};
-  glutInit(&argc, argv);
-  glutInitDisplayMode(GLUT_RGBA | GLUT_SINGLE);
-  if (g_Chip->framebuffer().w() <= 320) {
-    glutInitWindowSize(2*g_Chip->framebuffer().w(),
-                       2*g_Chip->framebuffer().h());
-  } else {
-    glutInitWindowSize(g_Chip->framebuffer().w(),
-                       g_Chip->framebuffer().h());
+  // glfw window
+  if (!glfwInit()) {
+    fprintf(stderr,"ERROR: cannot initialize glfw.");
+    exit(-1);
   }
-  glutCreateWindow("Silice verilator framework");
-  glutDisplayFunc(render);
+  GLFWwindow* window = NULL;
+  if (g_Chip->framebuffer().w() <= 320) {
+    window = glfwCreateWindow(2*g_Chip->framebuffer().w(),
+                              2*g_Chip->framebuffer().h(),
+                              "Silice verilator framework", NULL, NULL);
+  } else {
+    window = glfwCreateWindow(g_Chip->framebuffer().w(),
+                              g_Chip->framebuffer().h(),
+                              "Silice verilator framework", NULL, NULL);
+  }
+  glfwMakeContextCurrent(window);
+  glfwSwapInterval(1);
   // prepare texture
   glGenTextures(1,&g_FBtexture);
   glBindTexture(GL_TEXTURE_2D,g_FBtexture);
@@ -120,7 +149,6 @@ void display_loop(DisplayChip *chip)
   glEnable(GL_TEXTURE_2D);
   glColor3f(1.0f,1.0f,1.0f);
   // setup view
-  glViewport(0,0,g_Chip->framebuffer().w(),g_Chip->framebuffer().h());
   glMatrixMode(GL_PROJECTION);
   glLoadIdentity();
   glOrtho(0.0f, 1.0f, 1.0f, 0.0f, -1.0f, 1.0f);
@@ -129,7 +157,17 @@ void display_loop(DisplayChip *chip)
   // start simulation in a thread
   std::thread th(simul);
   // enter main loop
-  glutMainLoop();
+  while (!glfwWindowShouldClose(window)) {
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    glViewport(0, 0, width, height);
+    render();
+    glfwSwapBuffers(window);
+    glfwPollEvents();
+  }
+  // terminate
+  glfwDestroyWindow(window);
+  glfwTerminate();
 }
 
 // ----------------------------------------------------------------------------

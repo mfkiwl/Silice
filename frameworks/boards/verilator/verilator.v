@@ -28,12 +28,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 `define VERILATOR         1
 `define COLOR_DEPTH       6
 `define SDRAM_WORD_WIDTH 16
+`define SIMULATION        1
 
 $$VERILATOR   = 1
 $$NUM_LEDS    = 8
 $$SIMULATION  = 1
 $$color_depth = 6
 $$color_max   = 63
+$$config['__display_supported'] = 'yes'
+$$config['__write_supported']   = 'yes'
+$$config['__finish_supported']  = 'yes'
 
 `timescale 1ns / 1ps
 `default_nettype none
@@ -62,17 +66,26 @@ module top(
   output [5:0] sdram_word_width,
   output [4:0] video_color_depth,
   // SPI screen
-  output oled_clk,
-  output oled_mosi,
-  output oled_dc,
-  output oled_csn,
-  output oled_resn,
+  output spiscreen_clk,
+  output spiscreen_mosi,
+  output spiscreen_dc,
+  output spiscreen_csn,
+  output spiscreen_resn,
   output [1:0] spiscreen_driver,
   output [9:0] spiscreen_width,
   output [9:0] spiscreen_height,
+  // parallel screen
+  output prlscreen_clk,
+  output [7:0] prlscreen_d,
+  output prlscreen_rs,
+  output prlscreen_csn,
+  output prlscreen_resn,
+  output [1:0] prlscreen_driver,
+  output [9:0] prlscreen_width,
+  output [9:0] prlscreen_height,
   // basic
-  input        clk,
-  output [7:0] leds
+  output [7:0] leds,
+  input        clk
   );
 
 // this is used by the verilator framework
@@ -130,7 +143,9 @@ wire done_main;
 M_main __main(
   .clock(clk),
   .reset(RST_q[0]),
+`ifdef BASIC
   .out_leds(__main_leds),
+`endif
 `ifdef SDRAM
   .out_sdram_clock(__main_sdram_clock),
   .out_sdram_cle(__main_sdram_cle),
@@ -154,14 +169,34 @@ M_main __main(
   .out_video_vs(__main_video_vs),
 `endif
 `ifdef OLED
-  .out_oled_clk(oled_clk),
-  .out_oled_mosi(oled_mosi),
-  .out_oled_dc(oled_dc),
-  .out_oled_csn(oled_csn),
-  .out_oled_resn(oled_resn),
+  .out_oled_clk(spiscreen_clk),
+  .out_oled_mosi(spiscreen_mosi),
+  .out_oled_dc(spiscreen_dc),
+  .out_oled_csn(spiscreen_csn),
+  .out_oled_resn(spiscreen_resn),
   .out_spiscreen_driver(spiscreen_driver),
   .out_spiscreen_width(spiscreen_width),
   .out_spiscreen_height(spiscreen_height),
+`endif
+`ifdef SPISCREEN
+  .out_spiscreen_clk(spiscreen_clk),
+  .out_spiscreen_mosi(spiscreen_mosi),
+  .out_spiscreen_dc(spiscreen_dc),
+  .out_spiscreen_csn(spiscreen_csn),
+  .out_spiscreen_resn(spiscreen_resn),
+  .out_spiscreen_driver(spiscreen_driver),
+  .out_spiscreen_width(spiscreen_width),
+  .out_spiscreen_height(spiscreen_height),
+`endif
+`ifdef PARALLEL_SCREEN
+  .out_prlscreen_clk(prlscreen_clk),
+  .out_prlscreen_d(prlscreen_d),
+  .out_prlscreen_rs(prlscreen_rs),
+  .out_prlscreen_csn(prlscreen_csn),
+  .out_prlscreen_resn(prlscreen_resn),
+  .out_prlscreen_driver(prlscreen_driver),
+  .out_prlscreen_width(prlscreen_width),
+  .out_prlscreen_height(prlscreen_height),
 `endif
   .in_run(run_main),
   .out_done(done_main)

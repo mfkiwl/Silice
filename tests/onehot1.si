@@ -1,0 +1,14 @@
+
+algorithm main(
+  output uint8 leds
+) <onehot>
+{
+  leds = 0;
+++:
+  leds = 1;
+++:
+  leds = 2;
+++:
+  leds = 3;
+
+}

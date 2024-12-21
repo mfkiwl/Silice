@@ -1,0 +1,467 @@
+// SL 2023-04-17 @sylefeb
+// ========================================================
+//
+// Compact risc-V RV32I CPU with byte RAM memory interface
+//
+// Simple, compact, slow
+//
+// CPI: 7 if on BRAM excl. load-store (3 cycles in CPU + 4 bytes fetch)
+//
+// NOTE: Write byte memory interface
+//
+// NOTE: Please get familiar with the ice-v first.
+//
+// NOTE: Needs further clean-up
+//
+// ========================================================
+// https://github.com/sylefeb/Silice
+// MIT license, see LICENSE_MIT in Silice repo root
+// ========================================================
+
+$$if ICEV_FAST_SHIFT then
+$$print("Ice-V-ram configured for fast shift (barrel shifter)")
+$$end
+
+// --------------------------------------------------
+// Processor
+// --------------------------------------------------
+
+$$if SIMULATION then
+$$TRACE   = nil
+$$end
+
+$$ print("--------------- Ice-V-ram ---------------")
+$$ Nregs  = 32
+$$ cycleW = 32
+
+$$if ICEV_MULDIV then
+$$ print("Ice-V-ram configured with mul and div (*not* full RV32IM)")
+$$div_width     = 32
+$$div_unsigned  = 1
+$$div_remainder = 1
+$include('../../common/divint_std.si')
+$$end
+
+$$NOP=0x13
+
+$$if not Boot then Boot = 0 end
+
+// bitfield for easier decoding of instructions
+bitfield Rtype { uint1 unused1, uint1 sign, uint4 unused2, uint1 muldiv,
+                 uint5 rs2,     uint5 rs1,  uint3 op, uint5 rd, uint7 opcode}
+
+
+// --------------------------------------------------
+// Risc-V RV32I CPU with 8 bits memory interface
+//
+// ---- CPU stages (same as dual on a single core) ----
+//
+// F:     instruction fetched, setup regs
+// T:     trigger ALU+decode
+// LS1:   load/store stage 1, setup RAM (optional, on load/store)
+// LS2/C: load/store stage 2, commit result to register, setup RAM (instr)
+//
+// NOTE: that no state is waiting both on ALU and RAM
+//       it is not possible for RAM to deliver a request while we wait on ALU
+//
+// LS1         might wait on ALU
+// LS2/C and F might wait on RAM
+//
+// At each cycle a single state is active:
+// cycle i    F    (0)
+// cycle i+1  T    (0)
+// cycle i+2  LS1  (0)
+// cycle i+3  LS2/C(0)
+//
+// ---------------------------------
+
+// 8 bits ram interface
+interface icev_ram_user {
+  output  addr,        // memory address
+  output  wenable,     // write enable
+  output  byte_offset, // byte offset 0-3
+  output  byte_size,   // byte size   1,2,4
+  output  wdata,       // data to be written
+  input   rdata,       // data read from memory
+  output  req_valid,   // pulses high when request is valid
+  input   done,        // pulses high when request is completed
+}
+
+unit icev_ram(
+  icev_ram_user mem,
+$$if ICEV_USERDATA then
+  input uint32  user_data,
+$$end
+$$if TRACE then
+  input uint1 trace_on,
+$$end
+) {
+
+  // register files, two BRAMs to fetch two registers at once
+  bram int32 xregsA[$Nregs$]={pad(0)}; bram int32 xregsB[$Nregs$]={pad(0)};
+
+  // current instruction
+  uint32 instr($NOP$);
+  uint1  instr_trigger(0);
+
+  // CPU stages
+  uint4  stage(4b1000);
+
+  // program counters
+  uint$addrW$ pc($Boot//4-1$);
+  // next program counter
+  uint$addrW$ pc_plus1 <:: pc + 1;
+
+  // value that has been loaded from memory
+  int32 loaded = uninitialized;
+
+  // decoder + ALU, executes the instruction and tells the processor what to do
+  execute exec(instr <:: instr, pc <:: pc, xa <: xregsA.rdata, xb <: xregsB.rdata);
+
+  // we need load/store in advance compared to what exec provides
+
+  uint5 opcode      <:: instr[ 2, 5];
+  uint1 load        <:: opcode == 5b00000;
+  uint1 store       <:: opcode == 5b01000;
+  uint1 load_store  <:: (load | store);
+
+  // uint1 load_store   <: (exec.load | exec.store);
+
+
+$$if TRACE then
+  uint32 cycle(0);
+  uint32 last_cycle(0);
+  uint1  trace(0);
+$$end
+
+  int32 write_back(0);
+  uint1 do_load_store(0);
+  uint1 do_fetch(0);
+
+  // track pending RAM requests
+  uint1 reqmem(0);
+  // a RAM request is done if we are expecting it and memory signals its done
+  uint1 reqmem_done    <:: reqmem & :mem.done;
+  // a RAM request is pending if there was one and it is still not done
+  uint1 reqmem_pending <:: reqmem & ~reqmem_done;
+
+  // always block, done every cycle
+  always {
+    // maintain request valid low
+    mem.req_valid   = 0;
+    do_load_store   = 0;
+    do_fetch        = 0;
+    // defaults to reading 32bits words
+    mem.byte_offset = 0;
+    mem.byte_size   = 4;
+    // decodes values loaded from memory (used when exec.load == 1)
+    switch ( exec.op[0,2] ) { // LB / LBU, LH / LHU, LW
+      case 2b00:{ loaded = {{24{(~exec.op[2,1])&mem.rdata[ 7,1]}},mem.rdata[ 0,8]}; }
+      case 2b01:{ loaded = {{16{(~exec.op[2,1])&mem.rdata[15,1]}},mem.rdata[ 0,16]};}
+      case 2b10:{ loaded = mem.rdata;   }
+      default:  { loaded = {32{1bx}}; } // don't care
+    }
+    // what do we write in register? (pc, alu, val or load)
+    write_back =      (exec.jump      ? (pc_plus1<<2)       : 32b0)
+                    | (exec.storeAddr ? exec.n[0,$addrW+2$] : 32b0)
+                    | (exec.storeVal  ? exec.val            : 32b0)
+                    | (exec.load      ? loaded              : 32b0)
+                    | (exec.intop     ? exec.r              : 32b0);
+$$if ICEV_USERDATA then
+    exec.user_data = user_data;
+$$end
+    // what to write on a store (used when exec.store == 1)
+    mem.wdata      = xregsB.rdata; // <- not shifted, byte interface with SOC
+    // maintain write enable low (pulses high when needed)
+    mem.wenable    = 0;
+    // maintain alu trigger low
+    exec.trigger   = 0;
+    // maintain register wenable low
+    // (pulsed when necessary)
+    xregsA.wenable = 0;
+
+    // four states: F, T, LS1, LS2/commit
+    onehot (stage) {
+      case 0: {
+        // ---- F
+        // may wait on RAM from previous fetch
+        instr         = reqmem_done ? mem.rdata : instr;
+        pc            = reqmem_done ? mem.addr  : pc;
+        // instruction fetch done?
+        instr_trigger = reqmem_done;
+$$if TRACE then
+        if (trace_on) {
+          if (instr_trigger) {
+            trace = 1;
+          }
+        }
+$$end
+      }
+      case 1: {
+        // ---- T
+        // registers are now in, triggers exec
+        exec.trigger  = instr_trigger;
+        instr_trigger = 0;
+      }
+      case 2: {
+        // ---- LS1
+        // may wait on ALU
+        do_load_store = ~exec.working & load_store;
+        //              ^^^^^^^^^^^^^
+        //             wait if ALU holds
+        // memory address from which to load/store
+        mem.addr       = (exec.n >> 2);
+        mem.req_valid  = do_load_store;
+        // store if exec.store == 1
+        mem.wenable     = exec.store;
+        mem.byte_size   = 1 << exec.op[0,2]; // gives 4,2 or 1
+        mem.byte_offset = exec.n[0,2];
+      }
+      case 3: {
+        // ---- LS2/commit
+        uint1 instr_done = ~reqmem_pending & ~exec.working;
+        //                  ^^^^^^^^^^^^^^    ^^^^^^^^^^^^^
+        //  wait on RAM if request pending   wait on working ALU
+        // commit result
+        xregsA.wenable = ~exec.no_rd & ~reqmem_pending & ~exec.working;
+$$if TRACE then
+        if (trace_on) {
+          if (trace & instr_done) {
+            __write("@%h %h ",pc<<2,instr);
+            last_cycle = cycle;
+            if (xregsA.wenable) {
+              __display("x[%d]=%h",exec.write_rd,write_back);
+            } else {
+              __display("");
+            }
+            trace = 0;
+          }
+        }
+$$end
+$$if ICEV_VERILATOR_TRACE then
+      // this is used to track retired instr. and compare CPUs
+      if (instr_done) {
+				__verilog("$c32(\"cpu_retires(4,\",%,\",\",%,\",\",%,\",\",%,\");\");",
+          pc<<2,instr,Rtype(instr).rd,write_back);
+			}
+$$end
+        // prepare instruction fetch
+        // instruction fetch in progress
+        do_fetch       = instr_done & ~reset;
+        mem.addr       = do_fetch ? (exec.jump ? (exec.n >> 2) : pc_plus1)
+                                  : mem.addr; // <= preserve addr if RAM is busy
+        mem.req_valid  = do_fetch;
+      }
+    }
+
+    // advance states unless reset, waiting on ALU or RAM
+    stage       = (exec.working | reset | reqmem_pending)
+                ? stage
+                : // {stage[0,3],stage[3,1]};
+                  { stage[2,1] | (stage[1,1] & ~load_store),
+                    stage[1,1]               &  load_store,
+                    stage[0,1],
+                    stage[3,1] };
+
+    // pending memory request?
+    reqmem      = do_fetch | do_load_store | reqmem_pending;
+    //            ^^^^^^^    ^^^^^^^         ^^^^^^^^^^^^^^
+    //            on fetch,  on load/store,  or previous still active
+
+    // write back data to both register BRAMs
+    xregsA.wdata    = write_back;      xregsB.wdata   = write_back;
+    // xregsB written when xregsA is
+    xregsB.wenable  = xregsA.wenable;
+    // write to write_rd, else track instruction register
+    xregsA.addr     = xregsA.wenable ? exec.write_rd : Rtype(instr).rs1;
+    xregsB.addr     = xregsA.wenable ? exec.write_rd : Rtype(instr).rs2;
+
+$$if TRACE then
+    if (trace_on) {
+      if (mem.wenable) {
+        __display("store @%x = %x",mem.addr<<2,mem.wdata<<{mem.byte_offset,3b000});
+      }
+    }
+    cycle = cycle + 1;
+$$end
+
+  }
+
+}
+
+// --------------------------------------------------
+// execute: decoder + ALU
+// - decodes instructions
+// - performs all integer computations
+
+algorithm execute(
+  // instruction, program counter and registers
+  input  uint32 instr,   input  uint$addrW$ pc, input int32 xa, input int32 xb,
+  // trigger: pulsed high when the decoder + ALU should start
+  input  uint1  trigger,
+  // outputs all information the processor needs to decide what to do next
+  output uint3  op,    output uint5  write_rd, output  uint1  no_rd,
+  output uint1  jump,  output uint1  load,     output  uint1  store,
+  output int32  val,   output uint1  storeVal, output  uint1  working(0),
+  output uint$addrW+2$ n(0),  output uint1  storeAddr, // next address adder
+  output uint1  intop, output int32  r,         // integer operations
+$$if ICEV_USERDATA then
+  input  uint32 user_data
+$$end
+) {
+  uint5        shamt(0); // shifter status
+  uint$cycleW$ cycle(0); // cycle counter
+
+  // ==== decode immediates
+  int32 imm_u  <: {instr[12,20],12b0};
+  int32 imm_j  <: {{12{instr[31,1]}},instr[12,8],instr[20,1],instr[21,10],1b0};
+  int32 imm_i  <: {{20{instr[31,1]}},instr[20,12]};
+  int32 imm_b  <: {{20{instr[31,1]}},instr[7,1],instr[25,6],instr[8,4],1b0};
+  int32 imm_s  <: {{20{instr[31,1]}},instr[25,7],instr[7,5]};
+
+  // ==== decode opcode
+  uint5 opcode    <: instr[ 2, 5];
+  uint1 AUIPC     <: opcode == 5b00101;  uint1 LUI    <: opcode == 5b01101;
+  uint1 JAL       <: opcode == 5b11011;  uint1 JALR   <: opcode == 5b11001;
+  uint1 IntImm    <: opcode == 5b00100;  uint1 IntReg <: opcode == 5b01100;
+  uint1 CSR       <: opcode == 5b11100;  uint1 branch <: opcode == 5b11000;
+  uint1 regOrImm  <: IntReg  | branch;                    // reg or imm in ALU?
+  uint1 pcOrReg   <: AUIPC   | JAL    | branch;           // pc or reg in addr?
+  uint1 sub       <: IntReg  & Rtype(instr).sign;         // subtract
+$$if ICEV_MULDIV then
+  uint1 muldiv    <: IntReg & Rtype(instr).muldiv;        // mul or div
+  div32 div<reginputs>;
+  uint1 dividing(0);
+$$end
+
+  // ==== select next address adder first input
+  int$addrW+3$ addr_a <: pcOrReg ? __signed({1b0,pc[0,$addrW$],2b0}) : xa;
+  // ==== select ALU second input
+  int32 b             <: regOrImm ? (xb) : imm_i;
+
+  int32 ra <: xa; int32 rb <: b;
+
+  // ==== allows to do subtraction and all comparisons with a single adder
+  // trick from femtorv32/swapforth/J1
+  int33 a_minus_b <: {1b1,~rb} + {1b0,ra} + 33b1;
+  uint1 a_lt_b    <: (ra[31,1] ^ rb[31,1]) ? ra[31,1] : a_minus_b[32,1];
+  uint1 a_lt_b_u  <: a_minus_b[32,1];
+  uint1 a_eq_b    <: a_minus_b[0,32] == 0;
+
+  // ==== select immediate for the next address computation
+  // 'or trick' from femtorv32
+  int$addrW+3$ addr_imm <: (AUIPC  ? imm_u : 32b0) | (JAL         ? imm_j : 32b0)
+                        |  (branch ? imm_b : 32b0) | ((JALR|load) ? imm_i : 32b0)
+                        |  (store  ? imm_s : 32b0);
+  always {
+    uint1 j(0); // temp variables for and comparator
+
+    // ==== set decoder outputs depending on incoming instructions
+    // load/store?
+    load         = opcode == 5b00000;   store        = opcode == 5b01000;
+    // operator for load/store           // register to write to?
+    op           = Rtype(instr).op;     write_rd     = Rtype(instr).rd;
+    // do we have to write a result to a register?
+    no_rd        = branch  | store  | (Rtype(instr).rd == 5b0);
+    // integer operations                // store next address?
+    intop        = (IntImm | IntReg);   storeAddr    = AUIPC;
+    // value to store directly
+  $$if ICEV_USERDATA then
+    val          =   (  LUI                ? imm_u      : 32b0)
+                  |  ( (CSR &~instr[20,1]) ? cycle      : 32b0)
+                  |  ( (CSR & instr[20,1]) ? user_data  : 32b0);
+  $$else
+    val          = LUI ? imm_u : 0; //cycle;
+  $$end
+    // store value?
+    storeVal     = LUI | CSR;
+
+
+    // ====================== ALU
+$$if not ICEV_FAST_SHIFT then
+    // are we still shifting?
+    uint1 shiting = (shamt != 0);
+    // shift (one bit per clock)
+    if (trigger) {
+      uint1 aluShift = (IntImm | IntReg) & op[0,2] == 2b01; // shift requested
+      // start shifting?
+      shamt  = aluShift ? __unsigned(b[0,5]) : 0;
+      // store value to be shifted
+      r      = xa;
+    } else {
+      if (shiting) {
+        // decrease shift size
+        shamt = shamt - 1;
+        // shift one bit
+        r     = op[2,1] ? (Rtype(instr).sign ? {r[31,1],r[1,31]}
+                        : {__signed(1b0),r[1,31]}) : {r[0,31],__signed(1b0)};
+      }
+    }
+    working = (shamt != 0);
+$$end
+    // all ALU operations
+    switch (op) {
+      case 3b000: { r = sub ? a_minus_b : ra + rb; }            // ADD / SUB
+      case 3b010: { r = a_lt_b; } case 3b011: { r = a_lt_b_u; } // SLTI / SLTU
+      case 3b100: { r = ra ^ rb;} case 3b110: { r = ra | rb;  } // XOR / OR
+$$if not ICEV_FAST_SHIFT then
+      case 3b001: { }             case 3b101: { }              // SLLI/SRLI/SRAI
+$$else
+      case 3b001: { r = (ra <<< rb[0,5]); }
+      case 3b101: { r = Rtype(instr).sign ? (ra >>> rb[0,5]) : (ra >> rb[0,5]); }
+$$end
+      case 3b111: { r = ra & rb; }     // AND
+      default:    { r = {32{1bx}}; }  // don't care
+    }
+
+$$if ICEV_MULDIV then
+    // mul div
+    uint1 mulh     = op[0,2] == 2b01;
+    uint1 mulhsu   = op[0,2] == 2b10;
+    uint1 signa    = xa[31,1];
+    uint1 signb    = xb[31,1]; // vvvvvvvvvv keep the sign?
+    int33 ma       = {signa & (mulh | mulhsu), xa};
+    int33 mb       = {signb &  mulh,           xb};
+    int64 mul      = ma * mb;  // multiply
+    uint1 signdiv  = ~ op[0,1];
+    uint1 divdone      = isdone(div) & ~prev_divdone; // pulses on div done
+    uint1 prev_divdone = isdone(div);
+    //if (muldiv & working & divdone) {
+    //  __display("DIVISION %d / %d = %d (%d)\n",div.inum,div.iden,div.ret,div.rem);
+    //}
+    working        = (working | (trigger & op[2,1]))
+                   &  muldiv
+                   & ~(working & divdone);
+    if (trigger) { // div restarts each trigger
+      div.inum = (signdiv&signa) ? -xa : xa;
+      div.iden = (signdiv&signb) ? -xb : xb;
+      div <- ();
+    }
+    uint1 div_negate = signdiv & (signa ^ signb);
+    uint1 ret_h      = |op[0,2];
+    if (muldiv) {
+      r = ((~op[2,1] &  ret_h)                  ? mul[32,32] : 32b0) // MULH, MULHSU, MULHU
+        | ((~op[2,1] & ~ret_h)                  ? mul[ 0,32] : 32b0) // MUL
+        | (( op[2,1] &  div_negate &  op[1,1] ) ? -div.rem   : 32b0) // REM
+        | (( op[2,1] & ~div_negate &  op[1,1] ) ?  div.rem   : 32b0) // REMU
+        | (( op[2,1] &  div_negate & ~op[1,1] ) ? -div.ret   : 32b0) // DIV
+        | (( op[2,1] & ~div_negate & ~op[1,1] ) ?  div.ret   : 32b0);// DIVU
+		}
+$$end
+
+    // ====================== Comparator for branching
+    switch (op[1,2]) {
+      case 2b00:  { j = a_eq_b;  } /*BEQ */ case 2b10: { j=a_lt_b;} /*BLT*/
+      case 2b11:  { j = a_lt_b_u;} /*BLTU*/ default:   { j = 1bx; }
+    }
+    jump = (JAL | JALR) | (branch & (j ^ op[0,1]));
+    //                                   ^^^^^^^ negates comparator result
+
+    // ====================== Next address adder
+    n = addr_a + addr_imm;
+
+    // ==== increment cycle counter
+    cycle = cycle + 1;
+  }
+
+}

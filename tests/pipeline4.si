@@ -1,0 +1,28 @@
+algorithm main(output uint8 leds)
+{
+  uint8  v = 10;
+
+  subroutine test(input uint8 a) {
+    uint8  i = 0;
+    uint8  b = 0;
+    uint64 o = 0;
+    while (i < 8) { // the while will stop too early
+
+      i = i + 1;
+
+      {
+        a = a + 1;
+      ->
+        b = a + 10;
+      ->
+        __display("[%d] = %d",a,b);
+        o[a*8,8] = b;
+      }
+
+    }
+    return;
+ }
+
+ () <- test <- (0);
+
+}

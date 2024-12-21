@@ -16,7 +16,13 @@
       "name" : "ulx3s"
     },
     {
+      "name" : "ulx4m_ls"
+    },
+    {
       "name" : "de10nano"
+    },
+    {
+      "name" : "de2"
     },
     {
       "name" : "orangecrab"
@@ -43,10 +49,25 @@
       "name" : "icebitsy"
     },
     {
+      "name" : "mch2022"
+    },
+    {
+      "name" : "riegel"
+    },
+    {
+      "name" : "brot"
+    },
+    {
       "name" : "formal"
     },
     {
       "name" : "bare"
+    },
+    {
+      "name" : "minimal"
+    },
+    {
+      "name" : "colorlight"
     }
   ]
 }

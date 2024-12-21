@@ -25,15 +25,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 (header_2_M)
 
 */
+
+// TODO, FIXME: some peripherals mobilize the entire gpio while using
+//              only a subset, this needs revising (e.g. vga,pmod_qqspi)
+
 `define ULX3S 1
+`define ECP5  1
 `default_nettype none
 $$ULX3S    = 1
+$$ECP5     = 1
 $$HARDWARE = 1
 $$NUM_LEDS = 8
 $$NUM_BTNS = 7
 $$color_depth = 6
 $$color_max   = 63
-$$config['dualport_bram_supported'] = 'no'
+$$config['dualport_bram_supported'] = 'yes'
 
 module top(
   // basic
@@ -51,7 +57,7 @@ module top(
   output sdram_rasn,
   output [1:0]  sdram_ba,
   output [12:0] sdram_a,
-  inout  [15:0] sdram_d,
+  inout  [15:0] sdram_dq,
 `endif
 `ifdef AUDIO
   // audio jack
@@ -104,6 +110,37 @@ module top(
 `ifdef UART2
   // uart2
 `endif
+`ifdef SPIFLASH
+  output flash_csn,
+  output flash_mosi,
+  input  flash_miso,
+`endif
+`ifdef QSPIFLASH
+  output flash_csn,
+  inout  flash_mosi,
+  inout  flash_miso,
+  inout  flash_wpn,
+  inout  flash_holdn,
+`endif
+`ifdef I2C
+  // i2c for rtc
+  inout gpdi_sda,
+  inout gpdi_scl,
+`endif
+`ifdef PMOD_QQSPI
+  // uses only a subset
+  inout  qqspi_io0,
+  inout  qqspi_io1,
+  inout  qqspi_io2,
+  inout  qqspi_io3,
+  output qqspi_clk,
+  output qqspi_csn,
+  output qqspi_bank0,
+  output qqspi_bank1,
+  //inout  [27:0] gp,
+  //inout  [27:0] gn,
+`endif
+  output wifi_gpio0,
   input  clk_25mhz
   );
 
@@ -190,7 +227,7 @@ M_main __main(
   .in_btns       (btns),
 `endif
 `ifdef SDRAM
-  .inout_sdram_dq(sdram_d),
+  .inout_sdram_dq(sdram_dq),
   .out_sdram_clk (__main_out_sdram_clk),
   .out_sdram_cle (__main_out_sdram_cle),
   .out_sdram_dqm (__main_out_sdram_dqm),
@@ -237,6 +274,20 @@ M_main __main(
   .out_uart_tx  (__main_out_uart_rx),
   .in_uart_rx   (ftdi_txd),
 `endif
+`ifdef SPIFLASH
+  .out_sf_clk(__main_flash_clk),
+  .out_sf_csn(flash_csn),
+  .out_sf_mosi(flash_mosi),
+  .in_sf_miso(flash_miso),
+`endif
+`ifdef QSPIFLASH
+  .out_sf_clk(__main_flash_clk),
+  .out_sf_csn(flash_csn),
+  .inout_sf_io0(flash_mosi),
+  .inout_sf_io1(flash_miso),
+  .inout_sf_io2(flash_wpn),
+  .inout_sf_io3(flash_holdn),
+`endif
 `ifdef VGA
   .out_video_hs (__main_out_vga_hs),
   .out_video_vs (__main_out_vga_vs),
@@ -246,6 +297,20 @@ M_main __main(
 `endif
 `ifdef HDMI
   .out_gpdi_dp  (__main_out_gpdi_dp),
+`endif
+`ifdef I2C
+  .inout_gpdi_sda(gpdi_sda),
+  .inout_gpdi_scl(gpdi_scl),
+`endif
+`ifdef PMOD_QQSPI
+  // NOTE: overlaps with gp/gn (14 to 17)
+  .inout_ram_io0(qqspi_io0),
+  .inout_ram_io1(qqspi_io1),
+  .inout_ram_io2(qqspi_io2),
+  .inout_ram_io3(qqspi_io3),
+  .out_ram_clk(qqspi_clk),
+  .out_ram_csn(qqspi_csn),
+  .out_ram_bank({qqspi_bank1,qqspi_bank0}),
 `endif
   .clock         (clk_25mhz)
 );
@@ -315,9 +380,25 @@ assign ftdi_rxd      = __main_out_uart_rx;
 assign gpdi_dp       = __main_out_gpdi_dp;
 `endif
 
+`ifdef SPIFLASH
+wire __main_flash_clk;
+USRMCLK usrmclk_flash(
+          .USRMCLKI(__main_flash_clk),
+          .USRMCLKTS(1'b0));
+`endif
+
+`ifdef QSPIFLASH
+wire __main_flash_clk;
+USRMCLK usrmclk_flash(
+          .USRMCLKI(__main_flash_clk),
+          .USRMCLKTS(1'b0));
+`endif
+
 `ifdef US2_PS2
 assign usb_fpga_pu_dp = 1;
 assign usb_fpga_pu_dn = 1;
 `endif
+
+assign wifi_gpio0 = 1'b1; // see https://github.com/sylefeb/Silice/issues/207
 
 endmodule

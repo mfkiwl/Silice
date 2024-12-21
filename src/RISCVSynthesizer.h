@@ -55,7 +55,7 @@ namespace Silice
     std::unordered_map<std::string, int > m_InOutNames;
 
     /// \brief extracts C code
-    std::string cblockToString(siliceParser::CblockContext *cblock) const;
+    std::string cblockToString(siliceParser::RiscvContext *riscv,siliceParser::CblockContext *cblock) const;
     /// \brief generates the C header for compilation
     std::string generateCHeader(siliceParser::RiscvContext *riscv) const;
     /// \brief generates the Silice codde for compilation
@@ -79,9 +79,6 @@ namespace Silice
     /// \brief returns true if output is an access trigger (to an input or output)
     bool        isAccessTrigger(siliceParser::OutputContext *output,std::string& _accessed) const;
 
-    /// \brief returns a temporary filename (within temporary directory)
-    std::string tempFileName();
-
   public:
 
     RISCVSynthesizer(siliceParser::RiscvContext *riscv);
@@ -91,6 +88,8 @@ namespace Silice
 
     /// === implements Blueprint
 
+    /// \brief returns the blueprint name
+    std::string name() const override { return m_Name; }
     /// \brief writes the algorithm as a Verilog module, recurses through instanced blueprints
     void writeAsModule(std::ostream& out, const t_instantiation_context& ictx, bool first_pass) { }
     /// \brief inputs

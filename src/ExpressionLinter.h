@@ -48,7 +48,7 @@ namespace Silice
     const Algorithm *m_Host;
 
     /// \brief Instantiation context for parameterized VIOs
-    const Algorithm::t_instantiation_context& m_Ictx;
+    const Blueprint::t_instantiation_context& m_Ictx;
 
     /// \brief Does the Linter warn about width mismatches in assignments? (there are very frequent)
     bool m_WarnAssignWidth = false;
@@ -82,12 +82,6 @@ namespace Silice
       const t_type_nfo& nfo_b
     ) const;
 
-    /// \brief returns type nfo of expression
-    void typeNfo(
-      antlr4::tree::ParseTree                        *expr,
-      const Algorithm::t_combinational_block_context *bctx, 
-      t_type_nfo& _nfo) const;
-
     /// \brief returns type nfo of an identifier
     void typeNfo(
       std::string                                     idnt,
@@ -97,9 +91,17 @@ namespace Silice
     /// \brief resolves a parameterized VIO knowing the instantiation context
     void resolveParameterized(std::string idnt, const Algorithm::t_combinational_block_context *bctx, t_type_nfo &_nfo) const;
 
+    /// \brief gathers all vars involved in an expression and whether
+    ///        they are cast to track D (_vars is not cleared)
+    void allVars(
+      antlr4::tree::ParseTree                        *expr,
+      const Algorithm::t_combinational_block_context *bctx,
+      std::vector<std::pair<bool,std::string> >&     _vars,
+      bool                                            comb_cast=false) const;
+
   public:
 
-    ExpressionLinter(const Algorithm *host, const Algorithm::t_instantiation_context& ictx) : m_Host(host), m_Ictx(ictx) { }
+    ExpressionLinter(const Algorithm *host, const Blueprint::t_instantiation_context& ictx) : m_Host(host), m_Ictx(ictx) { }
 
     /// \brief Lint an expression
     void lint(
@@ -135,11 +137,17 @@ namespace Silice
     /// \brief Lint a binding
     void lintBinding(
       std::string                                     msg,
-      Algorithm::e_BindingDir                         dir,
-      int                                             line,
-      const t_type_nfo                               &left,
-      const t_type_nfo                               &right
+      AutoPtr<Blueprint>                              bp,
+      const Algorithm::t_instantiation_context&       local_ictx,
+      const Algorithm::t_binding_nfo&                 bnfo
       ) const;
+
+    /// \brief Returns the type nfo of an expression
+    void typeNfo(
+      antlr4::tree::ParseTree                        *expr,
+      const Algorithm::t_combinational_block_context *bctx,
+      t_type_nfo& _nfo) const;
+
 
   };
 

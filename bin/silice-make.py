@@ -1,11 +1,33 @@
 #!/usr/bin/env python3
 
+# -----------------------------------------------------------------------------
+#     Silice FPGA language and compiler
+#     Copyright 2019, (C) Sylvain Lefebvre and contributors
+#
+#     List contributors with: git shortlog -n -s -- <filename>
+#
+#     GPLv3 license, see LICENSE_GPLv3 in Silice repo root
+#
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program.  If not, see <https://www.gnu.org/licenses/>.
+# -----------------------------------------------------------------------------
+
 import os
 import sys
 import json
 import argparse
 import platform
 import sysconfig
+import subprocess
 # from termcolor import colored
 
 def colored(str,clr,attrs=0):
@@ -15,15 +37,14 @@ def colored(str,clr,attrs=0):
 parser = argparse.ArgumentParser(description='silice-make is the Silice build tool')
 parser.add_argument('-s','--source', help="Source file to build.")
 parser.add_argument('-b','--board', help="Board to build for. Variant can be specified as board:variant")
-parser.add_argument('-t','--tool', help="Tool used for building (edalize,shell).")
+parser.add_argument('-t','--tool', help="Builder used (e.g. edalize, shell).")
 parser.add_argument('-p','--pins', help="Pins used in the design, comma separated, e.g. basic,vga")
 parser.add_argument('-o','--outdir', help="Specify name of output directory.", default="BUILD")
 parser.add_argument('-l','--list_boards', help="List all available target boards.", action="store_true")
 parser.add_argument('-r','--root', help="Root directory, use to override default frameworks.")
 parser.add_argument('-D','--defines', help="List of comma-separated defines to pass to Silice, e.g. -D A=0,B=1")
 parser.add_argument('--no_build', help="Only generate verilog output file.", action="store_true")
-parser.add_argument('--no_program', help="Only generate verilog output file and build bitstream.",
-                    action="store_true")
+parser.add_argument('--no_program', help="Only generate verilog output file and build bitstream.", action="store_true")
 parser.add_argument('--reprogram', help="Only program device.", action="store_true")
 
 args = parser.parse_args()
@@ -54,15 +75,28 @@ except FileExistsError:
 os.environ["BUILD_DIR"] = out_dir
 
 # - frameworks directory
-frameworks_dir = os.path.realpath(os.path.join(make_dir,"../frameworks/"))
+frameworks_dirs=list()
+frameworks_dirs.append(os.path.realpath(os.path.join(make_dir,"../share/silice/frameworks/")))
+frameworks_dirs.append('/usr/local/share/silice/frameworks/')
+if platform.system() == "Windows":
+    if sysconfig.get_platform().startswith("mingw"):
+      frameworks_dirs.append(subprocess.check_output('cygpath -m /usr/local/share/silice/frameworks/').decode('utf-8').strip())
 if args.root:
-  frameworks_dir = os.path.realpath(os.path.abspath(args.root))
-print("* Silice frameworks directory: ",frameworks_dir,"\t\t\t",end='')
-if (os.path.exists(frameworks_dir)):
-    print(colored("[ok]", 'green'))
+  frameworks_dirs.append(os.path.realpath(os.path.abspath(args.root)))
+# search in expected paths
+frameworks_dir = None
+for fdir in frameworks_dirs:
+  if (os.path.exists(fdir)):
+      frameworks_dir = fdir
+      break
+if frameworks_dir == None:
+  print("* Silice frameworks directory: \t\t\t",end='')
+  print(colored("[not found]", 'red'))
+  sys.exit(-1)
 else:
-    print(colored("[not found]", 'red'))
-    sys.exit(-1)
+  print("* Silice frameworks directory: ",frameworks_dir,"\t\t\t",end='')
+  print(colored("[ok]", 'green'))
+  frameworks_dir = fdir
 os.environ["FRAMEWORKS_DIR"] = frameworks_dir
 
 # enter build directory
@@ -96,7 +130,7 @@ if args.list_boards:
             print(colored("[ok]", 'green'))
         else:
             print(colored("[not found]", 'yellow'))
-        with open(board_path) as json_file:            
+        with open(board_path) as json_file:
             board_def = json.load(json_file)
             # list all variants
             for variant in board_def['variants']:
@@ -158,13 +192,22 @@ variant_pin_sets = {}
 for pin_set in target_variant['pins']:
     variant_pin_sets[pin_set['set']] = pin_set
 
-# check the selected tool exists (or selects default, first in json file)
+# check the selected builder exists (or selects default, first in json file)
 if args.tool:
     target_builder = None
+    # split builder/variant
+    target_builder_name = args.tool.split(":")[0]
+    target_builder_tool = None
+    if len(args.tool.split(":")) > 1:
+        target_builder_tool = args.tool.split(":")[1]
     for builder in target_variant['builders']:
-        if builder['builder'] == args.tool:
-            target_builder = builder
-            break
+        if builder['builder'] == target_builder_name:
+            if target_builder_tool == None:
+              target_builder = builder
+              break
+            elif target_builder_tool == builder['tool']:
+              target_builder = builder
+              break
     if target_builder == None:
         print(colored("builder '" + args.tool + "' not found", 'red'))
         sys.exit(-1)
@@ -241,7 +284,7 @@ elif target_builder['builder'] == 'edalize':
     my_env = os.environ
     my_env["PATH"] = make_dir + os.pathsep + my_env["PATH"]
 
-    from edalize import get_edatool
+    from edalize.edatool import get_edatool
     import subprocess
 
     tool   = target_builder['tool']
@@ -261,7 +304,7 @@ elif target_builder['builder'] == 'edalize':
             else:
                 if 'define' in variant_pin_sets[pin_set]:
                     defines[pin_set] = variant_pin_sets[pin_set]['define']
-    # prepare edam structure                    
+    # prepare edam structure
     edam = {'name' : 'build',
             'files': files,
             'tool_options': {tool: target_builder["tool_options"][0]},
@@ -269,7 +312,7 @@ elif target_builder['builder'] == 'edalize':
             }
 
     # check and adapt behavior
-    # reprogram imply to bypass build
+    # reprogram implies to bypass build
     if args.reprogram:
         args.no_build = True
         args.no_program = False
@@ -286,7 +329,7 @@ elif target_builder['builder'] == 'edalize':
 
         except KeyError as e:
             pass # when bitstream is not in board.json try anyway
-    # no build imply no program
+    # no build implies no program
     elif args.no_build:
         args.no_program = True
 
@@ -311,7 +354,7 @@ elif target_builder['builder'] == 'edalize':
         backend = get_edatool(tool)(edam=edam, work_root=out_dir)
         backend.configure()
         backend.build()
-    
+
     if not args.no_program:
         try:
             print(colored('programming device ... ','white', attrs=['bold']))

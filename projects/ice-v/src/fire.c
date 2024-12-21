@@ -4,6 +4,8 @@
 
 #include "oled.h"
 
+void f_putchar(int) {}
+
 unsigned char tbl[32*32]={
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -53,13 +55,13 @@ void draw_fire()
     for (int u=0;u<128;u++) {
       int clr  = tbl[(u>>2) + ((v>>2)<<5)]>>1;
       int clr3 = (clr<<1)+clr;
-      unsigned char *ptr = pal + clr3;
+      const unsigned char *ptr = pal + clr3;
       oled_pix(*ptr++,*ptr++,*ptr++);
     }
   }
 }
 
-int rng  = 31421;
+int rng = 31421;
 
 void update_fire()
 {
@@ -82,7 +84,6 @@ void update_fire()
 void main()
 {
   *(LEDS) = 7;
-
   oled_init();
   oled_fullscreen();
   for (int v=0;v<32;v++) {
@@ -90,11 +91,10 @@ void main()
       tbl[u+(v<<5)] = (v == 0) ? 63 : 0;
     }
   }
-
   int time = 0;
   while (1) {
-    draw_fire();
     update_fire();
+    draw_fire();
     ++ time;
     if ((time&63) == 0) {
       // turn off

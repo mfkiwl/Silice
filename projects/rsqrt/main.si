@@ -1,0 +1,36 @@
+$include('rsqrt.si')
+
+$$Fp = 22
+
+$$ dofile('rsqrt.lua')
+$$ for i=1,64,1 do
+$$ -- print('********************* x=' .. i .. ' exact =' .. math.floor( (1<<Fp) / math.sqrt(i/(1<<Fp)) ) )
+$$   print('********************* x=' .. i .. ' approx=' .. rsqrt_int(i))
+$$ end
+
+unit main(output uint8 leds)
+{
+
+  uint32 cycle(0);
+
+  algorithm {
+    uint32 i = 1;
+    uint32 v = 0;
+
+    while (i != 64) {
+
+      // __display("[%d] feeding %d",cycle,i,v);
+      uint24 j = i;
+      i   = i + 1;
+
+  ->
+  (v) = c_rsqrt<Fp=$Fp$>(j);
+
+      __display("[%d] rsqrt(%d) = %d",cycle,j,v);
+
+    }
+  }
+
+  always_after { cycle = cycle + 1; }
+
+}

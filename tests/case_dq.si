@@ -1,0 +1,21 @@
+algorithm main(output uint8 leds)
+{
+  uint8 outp(0); uint8 inp(0);
+  uint8 a = uninitialized;
+
+  switch (inp)
+  {
+    case 0: {
+      a = 1;
+    }
+    case 1: {
+      a = 2;
+    }
+    default: {
+      a = 3;
+    }
+  }
+
+  outp = a;
+
+}

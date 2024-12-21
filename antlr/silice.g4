@@ -1,22 +1,22 @@
 /*
 
     Silice FPGA language and compiler
-    Copyright 2019, (C) Sylvain Lefebvre and contributors 
+    Copyright 2019, (C) Sylvain Lefebvre and contributors
 
     List contributors with: git shortlog -n -s -- <filename>
 
     GPLv3 license, see LICENSE_GPLv3 in Silice repo root
 
-This program is free software: you can redistribute it and/or modify it 
-under the terms of the GNU General Public License as published by the 
-Free Software Foundation, either version 3 of the License, or (at your option) 
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your option)
 any later version.
 
-This program is distributed in the hope that it will be useful, but WITHOUT 
-ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License along with 
+You should have received a copy of the GNU General Public License along with
 this program.  If not, see <https://www.gnu.org/licenses/>.
 
 (header_2_G)
@@ -58,6 +58,8 @@ RETURN              : 'return' ;
 
 BREAK               : 'break' ;
 
+STALL               : 'stall' ;
+
 DISPLAY             : '$display' | '__display' ;
 
 DISPLWRITE          : '__write' ;
@@ -68,9 +70,12 @@ TOSIGNED            : '__signed' ;
 
 TOUNSIGNED          : '__unsigned' ;
 
+INLINE_V            : '__verilog' ;
+
 DONE                : 'isdone' ;
 
-ALWAYS              : 'always' | 'always_before' ;
+ALWAYS              : 'always';
+ALWAYS_BEFORE       : 'always_before';
 ALWAYS_AFTER        : 'always_after' ;
 
 BRAM                : 'bram' ;
@@ -133,16 +138,21 @@ RDEFINE             : ':>' ;
 BDEFINE             : '<:>';
 LDEFINEDBL          : '<::' ;
 BDEFINEDBL          : '<::>';
-AUTO                : '<:auto:>' ;
+AUTOBIND            : '<:auto:>' ;
+AUTO                : 'auto' ;
 
 ALWSASSIGNDBL       : '::=' ;
 ALWSASSIGN          : ':=' ;
 
-OUTASSIGN           : '^=' ;
+ASSIGN_BACKWARD     : '^=' ;
+ASSIGN_FORWARD      : 'v=' ;
+ASSIGN_AFTER        : 'vv=' ;
 
 HASH                : '#';
 
 IDENTIFIER          : LETTER+ (DIGIT|LETTERU)* ;
+
+NONAME              : '_';
 
 CONSTANT            : '-'? DIGIT+ ('b'|'h'|'d') (DIGIT|[a-fA-Fxz])+ ;
 
@@ -160,7 +170,7 @@ NEXT                : '++:' ;
 
 ATTRIBS             : '(*' ~[\r\n]* '*)' ;
 
-STRING              : '"' ~[\r\n"]* '"' ; // '; // antlr-mode is broken and does not handle literal `"` in selectors
+STRING              : '"' (~[\r\n"] | '\\"')* '"' ; // '; // antlr-mode is broken and does not handle literal `"` in selectors
 
 ERROR_CHAR          : . ; // catch-all to move lexer errors to parser
 
@@ -168,7 +178,7 @@ ERROR_CHAR          : . ; // catch-all to move lexer errors to parser
 
 /* -- Declarations, init and bindings -- */
 
-constValue          : minus='-'? NUMBER | CONSTANT | WIDTHOF '(' IDENTIFIER ')';
+constValue          : minus='-'? NUMBER | CONSTANT | (WIDTHOF '(' base=IDENTIFIER ('.' member=IDENTIFIER)? ')');
 
 value               : constValue | initBitfield ;
 
@@ -181,36 +191,45 @@ sstacksz            :  'stack:' NUMBER ; // deprecated
 sformdepth          :  '#depth' '=' NUMBER ;
 sformtimeout        :  '#timeout' '=' NUMBER ;
 sformmode           :  '#mode' '=' IDENTIFIER ('&' IDENTIFIER)* ;
+sspecialize         :  IDENTIFIER ':' TYPE ;
+sparam              :  IDENTIFIER '=' (NUMBER|CONSTANT) ;
 
-bpModifier          : sclock | sreset | sautorun | sonehot | sstacksz | sformdepth | sformtimeout | sformmode | sreginput ;
+bpModifier          : sclock | sreset | sautorun | sonehot | sstacksz | sformdepth | sformtimeout | sformmode | sreginput | sspecialize | sparam;
 bpModifiers         : '<' bpModifier (',' bpModifier)* '>' ;
 
 pad                 : PAD '(' (value | UNINITIALIZED) ')' ;
 file                : FILE '(' STRING ')' ;
 initList            : '{' value (',' value)* (',' pad)? ','? '}' | '{' (file ',')? pad '}'  | '{' '}' ;
 
-memNoInputLatch     : 'input' '!' ;
 memDelayed          : 'delayed' ;
 memClocks           : (clk0=sclock ',' clk1=sclock) ;
-memModifier         : memClocks | memNoInputLatch | memDelayed | STRING;
+memModifier         : memClocks | memDelayed | STRING;
 memModifiers        : '<' memModifier (',' memModifier)* ','? '>' ;
 
-type                   : TYPE | (SAMEAS '(' base=IDENTIFIER ('.' member=IDENTIFIER)? ')') ;
+type                   : TYPE | (SAMEAS '(' base=IDENTIFIER ('.' member=IDENTIFIER)? ')') | AUTO;
 declarationWire        : type alwaysAssigned;
 declarationVarInitSet  : '=' (value | UNINITIALIZED) ;
 declarationVarInitCstr : '(' (value | UNINITIALIZED) ')';
-declarationVar         : type IDENTIFIER ( declarationVarInitSet | declarationVarInitCstr )? ATTRIBS? ;
+declarationVarInitExpr : '=' expression_0 ;
+declarationVar         : type IDENTIFIER ( declarationVarInitSet | declarationVarInitCstr | declarationVarInitExpr )? ATTRIBS? ;
 declarationTable       : type IDENTIFIER '[' NUMBER? ']' ('=' (initList | STRING | UNINITIALIZED))? ;
 declarationMemory      : (BRAM | BROM | DUALBRAM | SIMPLEDUALBRAM) TYPE name=IDENTIFIER memModifiers? '[' NUMBER? ']' ('=' (initList | STRING | UNINITIALIZED))? ;
-declarationInstance    : blueprint=IDENTIFIER name=IDENTIFIER bpModifiers? ( '(' bpBindingList ')' ) ? ;
-declaration            : declarationVar | declarationInstance | declarationTable | declarationMemory | declarationWire;
+declarationInstance    : blueprint=IDENTIFIER (name=IDENTIFIER | NONAME) bpModifiers? ( '(' bpBindingList ')' ) ? ;
+declaration            : subroutine
+                       | declarationVar ';'
+                       | declarationInstance ';'
+                       | declarationTable ';'
+                       | declarationMemory ';'
+                       | declarationWire ';'
+                       | stableinput ';'
+                       ;
 
-bpBinding              : left=IDENTIFIER (LDEFINE | LDEFINEDBL | RDEFINE | BDEFINE | BDEFINEDBL) right=idOrAccess | AUTO;
+bpBinding              : left=IDENTIFIER (LDEFINE | LDEFINEDBL | RDEFINE | BDEFINE | BDEFINEDBL) right=idOrAccess | AUTOBIND;
 bpBindingList          : bpBinding ',' bpBindingList | bpBinding | ;
 
 /* -- io lists -- */
 
-io                  : ( (is_input='input' nolatch='!'? ) | (is_output='output' combinational='!'?) | is_inout='inout' ) IDENTIFIER ;
+io                  : ( (is_input='input') | ((is_output='output' | is_inout='inout') combinational='!'? combinational_nocheck='(!)'?)) IDENTIFIER declarationVarInitCstr? ;
 
 ioList              : io (',' io)* ','? | ;
 
@@ -229,7 +248,7 @@ intrface            : INTERFACE IDENTIFIER '{' ioList '}' ;
 
 /* -- io definition (from group or interface) -- */
 
-ioDef               : (INPUT | (OUTPUT combinational='!'?))? defid=IDENTIFIER groupname=IDENTIFIER ('{' ioList '}')? ;
+ioDef               : (INPUT | (OUTPUT combinational='!'? combinational_nocheck='(!)'?))? defid=IDENTIFIER groupname=IDENTIFIER ('{' ioList '}')? ;
 
 /* -- bitfields -- */
 
@@ -298,11 +317,14 @@ unaryExpression     : (
 
 concatenation       : '{' (NUMBER concatenation | expression_0 (',' expression_0)*) '}';
 
-atom                : CONSTANT 
-                    | NUMBER 
-                    | IDENTIFIER 
+combcast            : ':' (access | IDENTIFIER);
+
+atom                : CONSTANT
+                    | NUMBER
+                    | IDENTIFIER
                     | REPEATID
                     | access
+                    | combcast
                     | '(' expression_0 ')'
                     | TOSIGNED '(' expression_0 ')'
                     | TOUNSIGNED '(' expression_0 ')'
@@ -316,23 +338,21 @@ bitfieldAccess      : field=IDENTIFIER '(' (idOrIoAccess | tableAccess) ')' '.' 
 ioAccess            : base=IDENTIFIER ('.' IDENTIFIER)+ ;
 partSelect          : (ioAccess | tableAccess | bitfieldAccess | IDENTIFIER) '[' first=expression_0 ',' num=constValue ']' ;
 tableAccess         : (ioAccess | IDENTIFIER) '[' expression_0 ']' ;
-access              : (ioAccess | tableAccess | partSelect | bitfieldAccess) ; 
+access              : (ioAccess | tableAccess | partSelect | bitfieldAccess) ;
 
 idOrIoAccess        : (ioAccess | IDENTIFIER) ;
 idOrAccess          : (  access | IDENTIFIER) ;
 
 /* -- Assignments -- */
-                    
-assignment          : IDENTIFIER  ('=' | OUTASSIGN) expression_0
-                    | access      ('=' | OUTASSIGN) expression_0 ;
+
+assignment          : IDENTIFIER  ('=' | ASSIGN_BACKWARD | ASSIGN_FORWARD | ASSIGN_AFTER) expression_0
+                    | access      ('=' | ASSIGN_BACKWARD | ASSIGN_FORWARD | ASSIGN_AFTER) expression_0 ;
 
 alwaysAssigned      : IDENTIFIER   (ALWSASSIGN    | LDEFINE   ) expression_0
                     | access        ALWSASSIGN                  expression_0
                     | IDENTIFIER   (ALWSASSIGNDBL | LDEFINEDBL) expression_0
                     | access        ALWSASSIGNDBL               expression_0
                     ;
-
-alwaysAssignedList  : alwaysAssigned ';' alwaysAssignedList | ;
 
 /* -- Algorithm calls -- */
 
@@ -344,12 +364,7 @@ syncExec            : joinExec LARROW '(' callParamList ')' ;
 
 /* -- Circuitry instantiation -- */
 
-idOrIoAccessList    : idOrIoAccess ',' idOrIoAccessList
-                    | idOrIoAccess
-                    |
-                    ;
-
-circuitryInst       : '(' outs=idOrIoAccessList ')' '=' IDENTIFIER '(' ins=idOrIoAccessList ')';
+circuitryInst       : '(' outs=callParamList ')' '='  IDENTIFIER ('<' sparam (',' sparam)* '>')? '(' ins=callParamList ')';
 
 /* -- Control flow -- */
 
@@ -357,6 +372,7 @@ state               : state_name=IDENTIFIER ':' | NEXT ;
 jump                : GOTO IDENTIFIER ;
 returnFrom          : RETURN ;
 breakLoop           : BREAK ;
+stall               : STALL ;
 assert_             : ASSERT '(' expression_0 ')';
 // NOTE: keep the `_` here else it clashes with various keywords etc
 assume              : ASSUME '(' expression_0 ')';
@@ -367,18 +383,20 @@ assumestable        : ASSUMESTABLE '(' expression_0 ')';
 stableinput         : STABLEINPUT '(' idOrIoAccess ')';
 cover               : COVER '(' expression_0 ')';
 
-block               : '{' declarationList instructionList '}';
+block               : '{' instructionSequence '}';
 ifThen              : 'if' '(' expression_0 ')' if_block=block ;
-ifThenElse          : 'if' '(' expression_0 ')' if_block=block 'else' else_block=block ;
+ifThenElse          : 'if' '(' expression_0 ')' if_block=block else_keyword='else' else_block=block ;
 switchCase          : (SWITCH | ONEHOT) '(' expression_0 ')' '{' caseBlock * '}' ;
 caseBlock           : ('case' case_value=value ':' | DEFAULT ) case_block=block;
 whileLoop           : 'while' '(' expression_0 ')' while_block=block ;
 
 display             : (DISPLAY | DISPLWRITE) '(' STRING ( ',' callParamList )? ')';
 
+inline_v            : INLINE_V '(' STRING ( ',' callParamList )? ')';
+
 finish              : FINISH '(' ')';
 
-instruction         : assignment 
+instruction         : assignment
                     | syncExec
                     | asyncExec
                     | joinExec
@@ -386,6 +404,7 @@ instruction         : assignment
                     | circuitryInst
                     | returnFrom
                     | breakLoop
+                    | stall
                     | display
                     | finish
                     | assert_
@@ -395,57 +414,59 @@ instruction         : assignment
                     | assumestable
                     | assertstable
                     | cover
+                    | inline_v
+                    | alwaysAssigned
                     ;
 
-alwaysBlock         : ALWAYS       block;
-alwaysAfterBlock    : ALWAYS_AFTER block;
+alwaysBlock         : ALWAYS        block;
+alwaysBeforeBlock   : ALWAYS_BEFORE block;
+alwaysAfterBlock    : ALWAYS_AFTER  block;
 
-repeatBlock         : REPEATCNT '{' instructionList '}' ;
-
-pipeline            : block ('->' block) +;
+repeatBlock         : REPEATCNT '{' instructionSequence '}' ;
 
 /* -- Inputs/outputs -- */
 
-inout               : 'inout' TYPE IDENTIFIER 
-                    | 'inout' TYPE IDENTIFIER '[' NUMBER ']';
-input               : 'input' nolatch='!'? type IDENTIFIER
-                    | 'input' nolatch='!'? type IDENTIFIER '[' NUMBER ']';
-output              : 'output' combinational='!'? declarationVar
-                    | 'output' combinational='!'? declarationTable ; 
+inout               : 'inout' combinational='!'? combinational_nocheck='(!)'? declarationVar
+                    | 'inout' combinational='!'? combinational_nocheck='(!)'? declarationTable ;
+input               : 'input' declarationVar
+                    | 'input' declarationTable;
+output              : 'output' combinational='!'? combinational_nocheck='(!)'? declarationVar
+                    | 'output' combinational='!'? combinational_nocheck='(!)'? declarationTable ;
 outputs             : 'input' OUTPUTS '(' alg=IDENTIFIER ')' grp=IDENTIFIER ;
 inOrOut             :  input | output | inout | ioDef | outputs ;
 inOutList           :  inOrOut (',' inOrOut)* ','? | ;
 
 /* -- Declarations, subroutines, instruction lists -- */
 
-declarationList     : declaration ';' declarationList | ;
-
-instructionList     : 
+instructionListItem :
                       (
-                        (instruction ';') + 
+                        (instruction ';')
+                      | declaration
                       | block
+                      | alwaysBlock
+                      | alwaysBeforeBlock
+                      | alwaysAfterBlock
                       | repeatBlock
                       | state
                       | ifThenElse
                       | ifThen
                       | whileLoop
                       | switchCase
-                      | pipeline
-                      ) instructionList 
-                      | ;
+                      );
+instructionList     : instructionListItem *;
+
+pipeline             : instructionList ('->' instructionList) * ;
+
+instructionSequence  : pipeline | ;
 
 subroutineParam     : ( READ | WRITE | READWRITE | CALLS ) IDENTIFIER
 					  | input | output ;
-                    
+
 subroutineParamList : subroutineParam (',' subroutineParam)* ','? | ;
-subroutine          : SUB IDENTIFIER '(' subroutineParamList ')' '{' declList = declarationList  instructionList (RETURN ';')? '}' ;
-                    
-declAndInstrList    : (declaration ';' | subroutine | stableinput ';' ) *
-                      alwaysPre = alwaysAssignedList 
-                      alwaysBlock?
-                      alwaysAfterBlock?
-                      instructionList
-					  ;
+subroutine          : SUB IDENTIFIER '(' subroutineParamList ')' '{' instructionSequence (RETURN ';')? '}'
+                    | SUB IDENTIFIER ';' ;
+
+declAndInstrSeq     : instructionSequence ;
 
 /* -- Import -- */
 
@@ -459,7 +480,22 @@ circuitry           : 'circuitry' IDENTIFIER '(' ioList ')' block ;
 
 /* -- Algorithm -- */
 
-algorithm           : 'algorithm' HASH? IDENTIFIER '(' inOutList ')' bpModifiers? '{' declAndInstrList '}' ;
+algorithm           : 'algorithm' HASH? IDENTIFIER '(' inOutList ')' bpModifiers? '{' declAndInstrSeq '}' ;
+
+algorithmBlockContent : instructionSequence ;
+
+algorithmBlock      : 'algorithm' bpModifiers? '{' algorithmBlockContent '}' ;
+
+/* -- Unit -- */
+
+unitBlocks          :   (declaration) *
+                        (alwaysAssigned ';') *
+                        alwaysBlock?
+                        alwaysBeforeBlock? algorithmBlock? alwaysAfterBlock?
+                        ;
+
+
+unit                : 'unit' HASH? IDENTIFIER '(' inOutList ')' bpModifiers? '{' unitBlocks '}' ;
 
 /* -- RISC-V -- */
 
@@ -474,6 +510,18 @@ riscv               : RISCV IDENTIFIER '(' inOutList ')' riscvModifiers? ('=' in
 
 /* -- Overall structure -- */
 
-topList       :  (algorithm | riscv | importv | appendv | subroutine | circuitry | group | bitfield | intrface) topList | ;
+topList             :  (unit | algorithm  | riscv     | importv | appendv
+                             | subroutine | circuitry | group   | bitfield
+                             | intrface
+                       ) *
+                    ;
 
 root                : topList EOF ;
+
+rootInOutList       : inOutList EOF ;
+
+rootUnit            : (unit | algorithm) EOF ;
+
+rootIoList          : ioList EOF ;
+
+rootCircuitry       : circuitry EOF ;

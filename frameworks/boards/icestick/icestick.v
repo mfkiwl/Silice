@@ -26,18 +26,20 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 */
 `define ICESTICK 1
+`define ICE40 1
 `default_nettype none
 $$ICESTICK=1
+$$ICE40=1
 $$HARDWARE=1
 $$NUM_LEDS=5
 $$VGA=1
 $$color_depth=6
 $$color_max  =63
 $$config['bram_wenable_width'] = '1'
-$$config['dualport_bram_wenable0_width'] = 'data'
-$$config['dualport_bram_wenable1_width'] = 'data'
-$$config['simple_dualport_bram_wenable0_width'] = 'data'
-$$config['simple_dualport_bram_wenable1_width'] = 'data'
+$$config['dualport_bram_wenable0_width'] = '1'
+$$config['dualport_bram_wenable1_width'] = '1'
+$$config['simple_dualport_bram_wenable0_width'] = '1'
+$$config['simple_dualport_bram_wenable1_width'] = '1'
 
 module top(
   output D1,
@@ -108,6 +110,23 @@ module top(
   input  FLASH_MISO,
   output FLASH_CSN,
 `endif
+`ifdef PMOD_QQSPI
+  output PMOD1,
+  inout  PMOD2,
+  inout  PMOD3,
+  output PMOD4,
+  inout  PMOD7,
+  inout  PMOD8,
+  output PMOD9,
+  output PMOD10,
+`endif
+`ifdef SPISCREEN_EXTRA
+  output TR3,
+  output TR4,
+  output TR5,
+  output TR6,
+  output TR7,
+`endif
   input  CLK
   );
 
@@ -154,11 +173,11 @@ wire [5:0] __main_out_vga_b;
 // https://github.com/YosysHQ/icestorm/issues/76
 
 reg ready = 0;
-reg [31:0] RST_d;
-reg [31:0] RST_q;
+reg [23:0] RST_d;
+reg [23:0] RST_q;
 
 always @* begin
-  RST_d = RST_q >> 1;
+  RST_d = RST_q[23] ? RST_q : RST_q + 1;
 end
 
 always @(posedge CLK) begin
@@ -166,7 +185,7 @@ always @(posedge CLK) begin
     RST_q <= RST_d;
   end else begin
     ready <= 1;
-    RST_q <= 32'b11111111111111111111111111111111;
+    RST_q <= 0;
   end
 end
 
@@ -175,7 +194,7 @@ assign run_main = 1'b1;
 
 M_main __main(
   .clock(CLK),
-  .reset(RST_q[0]),
+  .reset(~RST_q[23]),
   .out_leds(__main_leds),
 `ifdef OLED
   .out_oled_mosi(__main_oled_mosi),
@@ -207,8 +226,31 @@ M_main __main(
   .out_sf_mosi(FLASH_MOSI),
   .in_sf_miso (FLASH_MISO),
 `endif
+`ifdef PMOD_QQSPI
+  .inout_ram_io0(PMOD2),
+  .inout_ram_io1(PMOD3),
+  .inout_ram_io2(PMOD7),
+  .inout_ram_io3(PMOD8),
+  .out_ram_clk(PMOD4),
+  .out_ram_csn(PMOD1),
+  .out_ram_bank({PMOD10,PMOD9}),
+`endif
+`ifdef SPISCREEN_EXTRA
+  .out_spiscreen_mosi(TR3),
+  .out_spiscreen_clk(TR4),
+  .out_spiscreen_csn(TR5),
+  .out_spiscreen_dc(TR6),
+  .out_spiscreen_resn(TR7),
+`endif
   .in_run(run_main)
 );
+
+/*
+`ifdef PMOD_QQSPI
+  assign PMOD9  = 1'b1;
+  assign PMOD10 = 1'b1;
+`endif
+*/
 
 assign D1 = __main_leds[0+:1];
 assign D2 = __main_leds[1+:1];

@@ -1,0 +1,9 @@
+circuitry test_circuit() // empty circuit
+{
+
+}
+
+algorithm main(output uint8 leds)
+{
+  () = test_circuit();
+}

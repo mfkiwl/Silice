@@ -52,7 +52,7 @@ Thus we'll be using a good chunk of BRAM to store the framebuffer
 
 While we update the framebuffer each frame, we also want to send its content
 towards the LCD screen. Things become more challenging here. The LCD driver uses
-the SPI protocol. With a [simple SPI controller](../common/spi.ice), it will
+the SPI protocol. With a [simple SPI controller](../common/spi.si), it will
 take roughly 16 cycles to send a single byte to the LCD.
 We have to send three (RGB) per pixel. So just that, at full frame, means at
 best `320*240*16*3` cycles per frame. Assuming a design running at a good
@@ -110,6 +110,13 @@ if I got this wrong!
 So instead, we do not use RST from the OrangeCrab, and bridge the A0 pin
 from the OrangeCrab to the keyboard RST. A simple bypass! Now we can control
 the featherwing keyboard RST independently, using A0.
+
+## Running the demo
+
+Plug the board while pressing the button (enters programming mode). Then from a shell in this directory:
+```
+make orangecrab
+```
 
 ## FPGA design
 

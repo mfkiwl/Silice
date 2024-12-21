@@ -23,12 +23,12 @@ ODDR2 #(
     .C1(~clock),
     .CE(1),
     .S(0),
-    .R(0)     
+    .R(0)
   );
 
 `else
 
-`ifdef ULX3S
+`ifdef ECP5
 
 ODDRX1F mddr
       (
@@ -41,11 +41,12 @@ ODDRX1F mddr
 
 `else
 
-`ifdef ICARUS
+reg ddr_out;
+assign out_pin = ddr_out;
 
-assign out_pin = twice[0];
-
-`endif
+always @(posedge clock or negedge clock) begin
+  ddr_out <= clock ? twice[0] : twice[1];
+end
 
 `endif
 `endif

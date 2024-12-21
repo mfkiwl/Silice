@@ -32,9 +32,12 @@ this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "siliceParser.h"
 
 #include "TypesAndConsts.h"
+#include "Utils.h"
 
 namespace Silice
 {
+
+  class SiliceCompiler;
 
   class Blueprint
   {
@@ -68,38 +71,54 @@ namespace Silice
     /// \brief base info about variables, inputs, outputs
     class t_var_nfo { // NOTE: if changed, remember to check var_nfo_copy
     public:
-      std::string  name;
+      std::string  base_name; // user given name (may be empty if internal var)
+      std::string  name;      // internal name
       t_type_nfo   type_nfo;
       std::vector<std::string> init_values;
       int          table_size        = 0; // 0: not a table, otherwise size
       bool         do_not_initialize = false;
       bool         init_at_startup   = false;
-      std::string  pipeline_prev_name; // if not empty, name of previous in pipeline trickling
       e_Access     access            = e_NotAccessed;
       e_VarUsage   usage             = e_Undetermined;
       std::string  attribs;
-      antlr4::misc::Interval source_interval;
+      Utils::t_source_loc srcloc;
     };
 
     /// \brief typedef to distinguish vars from ios
     class t_inout_nfo : public t_var_nfo {
     public:
-      bool nolatch = false;
+      bool combinational = false;
     };
 
     /// \brief specialized info class for outputs
     class t_output_nfo : public t_var_nfo {
     public:
       bool combinational = false;
+      bool combinational_nocheck = false; // when true, this is ignored in combinational cycle checks (if combinational == true)
     };
 
     /// \brief information about instantiation
-    typedef struct {
+    typedef struct s_instantiation_context {
+      SiliceCompiler                              *compiler = nullptr;
       std::string                                  instance_name;
-      std::string                                  local_instance_name;
-      std::unordered_map<std::string, std::string> parameters;
+      std::string                                  top_name;
+      std::unordered_map<std::string, std::string> autos;
+      std::unordered_map<std::string, std::string> params;
     } t_instantiation_context;
 
+    /// \brief context for the writer
+    class t_writer_context {
+    public:
+      std::ostream& out;
+      std::ostream& pipes;
+      std::ostream& wires;
+      t_writer_context(std::ostream& out_, std::ostream& pipes_, std::ostream& wires_) : out(out_), pipes(pipes_), wires(wires_) { }
+    };
+
+    /// \brief returns the blueprint name
+    virtual std::string name() const = 0;
+    /// \brief sets as a top module in the output stream
+    virtual void setAsTopMost() { }
     /// \brief writes the blueprint as a Verilog module
     virtual void writeAsModule(std::ostream& out, const t_instantiation_context& ictx, bool first_pass) = 0;
     /// \brief returns true if the blueprint requires a reset
@@ -122,9 +141,12 @@ namespace Silice
     virtual const std::unordered_map<std::string, int >& outputNames() const = 0;
     /// \brief all inout names, map contains index in m_InOuts
     virtual const std::unordered_map<std::string, int >& inOutNames()  const = 0;
+    /// \brief returns a VIO definition
+    virtual t_var_nfo getVIODefinition(std::string var, bool &_found) const;
     /// \brief determines vio bit width and (if applicable) table size
-    virtual std::tuple<t_type_nfo, int> determineVIOTypeWidthAndTableSize(std::string vname, antlr4::misc::Interval interval, int line) const;
-
+    virtual std::tuple<t_type_nfo, int> determineVIOTypeWidthAndTableSize(std::string vname, const Utils::t_source_loc& srcloc) const;
+    /// \brief determines vio bit width
+    virtual std::string resolveWidthOf(std::string vio, const t_instantiation_context& ictx, const Utils::t_source_loc& srcloc) const;
     /// \brief returns the name of the module
     virtual std::string moduleName(std::string blueprint_name,std::string instance_name) const = 0;
     /// \brief returns the name of an input port from its internal name
@@ -133,6 +155,16 @@ namespace Silice
     virtual std::string outputPortName(std::string name) const { return name; }
     /// \brief returns the name of an inout port from its internal name
     virtual std::string inoutPortName(std::string name)  const { return name; }
+    /// \brief returns variable bit range for verilog declaration
+    virtual std::string varBitRange(const t_var_nfo& v, const t_instantiation_context &ictx) const;
+    /// \brief returns a variable bit width for verilog use
+    virtual std::string varBitWidth(const t_var_nfo &v, const t_instantiation_context &ictx) const;
+    /// \brief returns a variable init value for verilog use (non-tables only)
+    virtual std::string varInitValue(const t_var_nfo &v, const t_instantiation_context &ictx) const;
+    /// \brief returns the base type of a variable
+    virtual e_Type      varType(const t_var_nfo& v, const t_instantiation_context &ictx) const;
+    /// \brief returns a type dependent string for resource declaration
+    virtual std::string typeString(e_Type type) const;
 
     /// \brief returns true of the 'combinational' boolean is properly setup for outputs
     virtual bool hasOutputCombinationalInfo() const = 0;

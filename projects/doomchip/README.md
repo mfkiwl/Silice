@@ -2,6 +2,10 @@
 
 *It will run Doom forever*
 
+[![A video recording of the DooM-chip in action, rendering E1M1](https://img.youtube.com/vi/ByCw1N0cJGI/0.jpg)](https://www.youtube.com/watch?v=ByCw1N0cJGI)
+
+(click to watch on YouTube)
+
 ## Foreword
 
 This is the DooM-chip! A partial recreation of Doom 1993 in hardware: there is no CPU, the entire render loop and (very basic) game logic is hardcoded in LUTs, flip-flops and wires. This is very different from a source port: there is zero reuse of the original game code, everything is new and written in Silice. Only the game data is reused.
@@ -14,9 +18,13 @@ This version was my first take at the Doom-chip, developed as a proof-of-concept
 
 The DooM-chip is a great example of what the Lua pre-processor has to offer. Indeed, the pre-processor automatically parses the game file data, extracts and generates all data-structures that are then embedded into BRAMs.
 
+## Framebuffer
+
+The Doom-chip writes data column by colum, and can be plugged either to a [Silice framework implementing a double framebuffer in SDRAM](hdmi_doomchip.si) or directly to a [SPI-screen configured to receive pixel data columns first](oled_doomchip.si).
+
 ## Where's All the Data?
 
-For obvious copyright reasons you have to provide your own Doom WAD file: for instance `doom1.wad`, to be placed in this directory. During compilation the data will be automatically extracted and processed. You can select the level in the header of [doomchip.ice](doomchip.ice) (see the "ExMy" string).
+For obvious copyright reasons you have to provide your own Doom WAD file: for instance `doom1.wad`, to be placed in this directory. During compilation the data will be automatically extracted and processed. You can select the level in the header of [doomchip.si](doomchip.si) (see the "ExMy" string).
 
 The DooM-chip also works with WAD files from the [freedoom project](https://freedoom.github.io/).
 
@@ -40,7 +48,7 @@ Done! (takes ~ 0.5 hour)
 
 The default is a ST7789 240x240 screen ; these are inexpensive (~ $6) and some models plug directly into the OLED connector of the ULX3S (you'll have to solder the connector if not present, it is located just below the ECP5).
 
-The OLED library supports also an SSD1351 driver, and other resolutions, but you'll have to edit the source code to customize for that: see configuration at the top of [oled_doomchip.ice](oled_doomchip.ice).
+The OLED library supports also an SSD1351 driver, and other resolutions, but you'll have to edit the source code to customize for that: see configuration at the top of [oled_doomchip.si](oled_doomchip.si).
 
 Plug the board to USB and launch ```make ulx3s-oled```
 

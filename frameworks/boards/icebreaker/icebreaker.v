@@ -26,25 +26,29 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 */
 `define ICEBREAKER 1
+`define ICE40 1
 `default_nettype none
 $$ICEBREAKER=1
+$$ICE40=1
 $$HARDWARE=1
 $$NUM_LEDS=5
 $$NUM_BTNS=3
 $$color_depth=6
 $$color_max  =63
 $$config['bram_wenable_width'] = '1'
-$$config['dualport_bram_wenable0_width'] = 'data'
-$$config['dualport_bram_wenable1_width'] = 'data'
-$$config['simple_dualport_bram_wenable0_width'] = 'data'
-$$config['simple_dualport_bram_wenable1_width'] = 'data'
+$$config['dualport_bram_wenable0_width'] = '1'
+$$config['dualport_bram_wenable1_width'] = '1'
+$$config['simple_dualport_bram_wenable0_width'] = '1'
+$$config['simple_dualport_bram_wenable1_width'] = '1'
 
 module top(
+`ifdef BASIC
   output LED1,
   output LED2,
   output LED3,
   output LED4,
   output LED5,
+`endif
 `ifdef BUTTONS
   input BTN1,
   input BTN2,
@@ -55,23 +59,24 @@ module top(
   input  RX,
 `endif
 `ifdef VGA
-  output P1A1, // r0
-  output P1A2, // r1
-  output P1A3, // r2
-  output P1A4, // r3
+  output P1A1,  // r0
+  output P1A2,  // r1
+  output P1A3,  // r2
+  output P1A4,  // r3
 
-  output P1A7,   // b0
-  output P1A8,   // b1
-  output P1A9,   // b2
-  output P1A10,  // b3
+  output P1A7,  // b0
+  output P1A8,  // b1
+  output P1A9,  // b2
+  output P1A10, // b3
 
   output P1B1,  // g0
   output P1B2,  // g1
   output P1B3,  // g2
   output P1B4,  // g3
 
-  output P1B7, // hs
+  output P1B7,  // hs
   output P1B8,  // vs
+// NOTE: P1B9 and P1B10 are left unused
 `endif
 `ifdef OLED
   output P1A1,
@@ -89,6 +94,16 @@ module top(
   inout P1A9,
   inout P1A10,
 `endif
+`ifdef PMOD2
+  inout P1B1,
+  inout P1B2,
+  inout P1B3,
+  inout P1B4,
+  inout P1B7,
+  inout P1B8,
+  inout P1B9,
+  inout P1B10,
+`endif
 `ifdef SPIFLASH
   output FLASH_SCK,
   output FLASH_SSB,
@@ -104,6 +119,67 @@ module top(
   inout  FLASH_IO1,
   inout  FLASH_IO2,
   inout  FLASH_IO3,
+`endif
+`ifdef PMOD_QQSPI
+  output P1A1,
+  inout  P1A2,
+  inout  P1A3,
+  output P1A4,
+  inout  P1A7,
+  inout  P1A8,
+  output P1A9,
+  output P1A10,
+`endif
+`ifdef PMOD_COM_OUT
+  output P1A1,
+  output P1A2,
+  output P1A3,
+  output P1A4,
+  output P1A7,
+  output P1A8,
+  output P1A9,
+  output P1A10,
+  output P1B1,
+  output P1B7,
+`endif
+`ifdef PMOD_COM_IN
+  input  P1A1,
+  input  P1A2,
+  input  P1A3,
+  input  P1A4,
+  input  P1A7,
+  input  P1A8,
+  input  P1A9,
+  input  P1A10,
+  input  P1B1,
+  input  P1B7,
+`endif
+`ifdef PARALLEL_SCREEN
+  output P2_1,
+  output P2_2,
+  output P1B4,  // (P2_3 collides with flash if on different clocks)
+  output P2_4,
+  output P2_7,
+  output P2_8,
+  output P1B10, // (P2_9 collides with flash if on different clocks)
+  output P2_10,
+  output P1B2,
+  output P1B3,
+  output P1B8,
+  output P1B9,
+`endif
+`ifdef EXTRAS
+  inout RGB_R,
+  inout RGB_G,
+  inout RGB_B,
+  inout P1B9,
+  inout P1B10,
+`endif
+`ifdef PMOD_DSPI
+  output P1A7,
+  inout  P1A8,
+  inout  P1A9,
+  output P1A10,
 `endif
   input  CLK
   );
@@ -148,11 +224,11 @@ wire __main_out_sf_mosi;
 `endif
 
 reg ready = 0;
-reg [31:0] RST_d;
-reg [31:0] RST_q;
+reg [15:0] RST_d;
+reg [15:0] RST_q;
 
 always @* begin
-  RST_d = RST_q >> 1;
+  RST_d = RST_q[15] ? RST_q : RST_q + 1;
 end
 
 always @(posedge design_clk) begin
@@ -160,7 +236,7 @@ always @(posedge design_clk) begin
     RST_q <= RST_d;
   end else begin
     ready <= 1;
-    RST_q <= 32'b111111111111111111111111111111;
+    RST_q <= 0;
   end
 end
 
@@ -170,8 +246,10 @@ assign run_main = 1'b1;
 M_main __main(
   .clock(CLK),
   .out_clock(design_clk),
-  .reset(RST_q[0]),
+  .reset(~RST_q[15]),
+`ifdef BASIC
   .out_leds(__main_leds),
+`endif
 `ifdef BUTTONS
   .in_btns({BTN3,BTN2,BTN1}),
 `endif
@@ -188,6 +266,9 @@ M_main __main(
 `endif
 `ifdef PMOD
   .inout_pmod({P1A10,P1A9,P1A8,P1A7,P1A4,P1A3,P1A2,P1A1}),
+`endif
+`ifdef PMOD2
+  .inout_pmod2({P1B10,P1B9,P1B8,P1B7,P1B4,P1B3,P1B2,P1B1}),
 `endif
 `ifdef OLED
   .out_oled_mosi(__main_oled_mosi),
@@ -210,14 +291,51 @@ M_main __main(
   .inout_sf_io2(FLASH_IO2),
   .inout_sf_io3(FLASH_IO3),
 `endif
+`ifdef PMOD_QQSPI
+  .inout_ram_io0(P1A2),
+  .inout_ram_io1(P1A3),
+  .inout_ram_io2(P1A7),
+  .inout_ram_io3(P1A8),
+  .out_ram_clk(P1A4),
+  .out_ram_csn(P1A1),
+  .out_ram_bank({P1A10,P1A9}),
+`endif
+`ifdef EXTRAS
+  .inout_extras({P1B10,P1B9,RGB_B,RGB_G,RGB_R}),
+`endif
+`ifdef PMOD_COM_OUT
+  .out_com_data({P1A10,P1A9,P1A8,P1A7,P1A4,P1A3,P1A2,P1A1}),
+  .out_com_clock(P1B1),
+  .out_com_valid(P1B7),
+`endif
+`ifdef PMOD_COM_IN
+  .in_com_data({P1A4,P1A3,P1A2,P1A1,P1A10,P1A9,P1A8,P1A7}),
+  .in_com_clock(P1B7),
+  .in_com_valid(P1B1),
+`endif
+`ifdef PARALLEL_SCREEN
+  .out_prlscreen_d({P2_10,P1B10,P2_8,P2_7,P2_4,P1B4,P2_2,P2_1}),
+  .out_prlscreen_resn(P1B2),
+  .out_prlscreen_csn(P1B8),
+  .out_prlscreen_rs(P1B3),
+  .out_prlscreen_clk(P1B9),
+`endif
+`ifdef PMOD_DSPI
+  .out_sf_csn(P1A7),
+  .inout_sf_io0(P1A8),
+  .inout_sf_io1(P1A9),
+  .out_sf_clk(P1A10),
+`endif
   .in_run(run_main)
 );
 
+`ifdef BASIC
 assign LED4 = __main_leds[0+:1];
 assign LED3 = __main_leds[1+:1];
 assign LED5 = __main_leds[2+:1];
 assign LED2 = __main_leds[3+:1];
 assign LED1 = __main_leds[4+:1];
+`endif
 
 `ifdef VGA
 assign P1A1  = __main_out_vga_r[2+:1];

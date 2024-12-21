@@ -5,14 +5,21 @@
       "name"      : "configurable",
       "framework" : "icebreaker.v",
       "pins"      : [
-        {"set"    : "basic"},
+        {"set"    : "basic", "define" : "BASIC=1"},
         {"set"    : "buttons", "define" : "BUTTONS=1"},
         {"set"    : "uart", "define" : "UART=1"},
         {"set"    : "vga", "define" : "VGA=1"},
         {"set"    : "oled", "define" : "OLED=1"},
         {"set"    : "pmod", "define" : "PMOD=1"},
+        {"set"    : "pmod2", "define" : "PMOD2=1"},
         {"set"    : "spiflash", "define" : "SPIFLASH=1"},
-        {"set"    : "qspiflash", "define" : "QSPIFLASH=1"}
+        {"set"    : "qspiflash", "define" : "QSPIFLASH=1"},
+        {"set"    : "extras", "define" : "EXTRAS=1"},
+        {"set"    : "pmod_qqspi", "define" : "PMOD_QQSPI=1"},
+        {"set"    : "pmod_com_out", "define" : "PMOD_COM_OUT=1"},
+        {"set"    : "pmod_com_in", "define" : "PMOD_COM_IN=1"},
+        {"set"    : "pmod_dspi", "define" : "PMOD_DSPI=1"},
+        {"set"    : "parallel_screen", "define" : "PARALLEL_SCREEN=1"}
       ],
       "builders": [
         {
@@ -21,8 +28,9 @@
           "tool": "icestorm",
           "tool_options": [
             {
-                "yosys_synth_options": ["-dsp","-abc9","-device u"],
-                "nextpnr_options": ["--up5k", "--freq 12", "--package sg48", "--timing-allow-fail"],
+                "icepack_options": ["-s"],
+                "yosys_synth_options": ["-dsp","-abc9","-device u","-relut","-top top"],
+                "nextpnr_options": ["--up5k", "--freq 12", "--package sg48", "-r"],
                 "pnr": "next"
             }
           ],
@@ -37,148 +45,5 @@
         }
       ]
     }
-  ],
-  "pins": {
-    "basic": [
-        {
-          "name": "leds",
-          "type": "uint5",
-          "io": "output"
-        }
-    ],
-    "buttons": [
-      {
-        "name": "btns",
-        "type": "uint3",
-        "io": "input"
-      }
-    ],
-    "uart": [
-      {
-        "name": "uart_tx",
-        "type": "uint1",
-        "io"  : "output"
-      },
-      {
-        "name": "uart_rx",
-        "type": "uint1",
-        "io"  : "input"
-      }
-    ],
-    "vga": [
-      {
-        "name": "vga_hs",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "vga_vs",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "vga_r",
-        "type": "uint6",
-        "io": "output"
-      },
-      {
-        "name": "vga_g",
-        "type": "uint6",
-        "io": "output"
-      },
-      {
-        "name": "vga_b",
-        "type": "uint6",
-        "io": "output"
-      }
-    ],
-    "oled": [
-      {
-        "name": "oled_clk",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_mosi",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_csn",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_resn",
-        "type": "uint1",
-        "io": "output"
-      },
-      {
-        "name": "oled_dc",
-        "type": "uint1",
-        "io": "output"
-      }
-    ],
-    "pmod": [
-      {
-        "name": "pmod",
-        "type": "uint8",
-        "io"  : "input_output"
-      }
-    ],
-    "spiflash": [
-      {
-        "name" : "sf_clk",
-        "type" : "uint1",
-        "io"   : "output"
-      },
-      {
-        "name" : "sf_csn",
-        "type" : "uint1",
-        "io"   : "output"
-      },
-      {
-        "name" : "sf_mosi",
-        "type" : "uint1",
-        "io"   : "output"
-      },
-      {
-        "name" : "sf_miso",
-        "type" : "uint1",
-        "io"   : "input"
-      }
-    ],
-    "qspiflash": [
-      {
-        "name" : "sf_clk",
-        "type" : "uint1",
-        "io"   : "output"
-      },
-      {
-        "name" : "sf_csn",
-        "type" : "uint1",
-        "io"   : "output"
-      },
-      {
-        "name" : "sf_io0",
-        "type" : "uint1",
-        "io"   : "input_output"
-      },
-      {
-        "name" : "sf_io1",
-        "type" : "uint1",
-        "io"   : "input_output"
-      },
-      {
-        "name" : "sf_io2",
-        "type" : "uint1",
-        "io"   : "input_output"
-      },
-      {
-        "name" : "sf_io3",
-        "type" : "uint1",
-        "io"   : "input_output"
-      }
-    ]
-  }
+  ]
 }
